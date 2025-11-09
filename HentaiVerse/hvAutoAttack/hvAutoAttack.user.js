@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.34.2
+// @version      2.90.34.3
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -911,7 +911,6 @@ try {
       '    <div style="margin-left: 20px;"><l0>Telegram Chat ID</l0><l1>Telegram Chat ID</l1><l2>Telegram Chat ID</l2>: <input name="telegramChatId" style="width:200px;" type="text" placeholder="123456789"></div>',
       '    <div style="margin-left: 20px;"><l0>Apprise 服务器地址</l0><l1>Apprise 服務器地址</l1><l2>Apprise Server URL</l2>: <input name="appriseUrl" style="width:400px;" type="text" placeholder="http://localhost:8000"></div>',
   '    <div style="margin-left: 20px;"><l0>Apprise 通知URLs (逗号分隔)</l0><l1>Apprise 通知URLs (逗號分隔)</l1><l2>Apprise Notification URLs (comma separated)</l2>: <input name="appriseUrls" style="width:400px;" type="text" placeholder="tgram://bottoken/ChatID"></div>',
-  '    <div style="margin-left: 20px;"><l0>远程通知优先级</l0><l1>遠程通知優先級</l1><l2>Remote Notification Priority</l2>: <select name="remoteNotificationPriority"><option value="default"><l0>默认（不显式指定）</l0><l1>預設（不另行指定）</l1><l2>Default (omit priority)</l2></option><option value="high"><l0>高</l0><l1>高</l1><l2>High</l2></option></select></div>',
       '    <div><button class="testRemoteNotification"><l0>测试远程通知</l0><l1>測試遠程通知</l1><l2>Test Remote Notification</l2></button></div>',
       '    <div><l0>掉落及数据记录</l0><l1>掉落及數據記錄</l1><l2>Drops and Usage Tracking</l2>: <input id="recordEach" type="checkbox"><label for="recordEach"><l0>单独记录每场战役</l0><l1>單獨記錄每場戰役</l1><l2>Record each battle separately</l2></label></div>',
       '    <div><l0>延迟</l0><l1>延遲</l1><l2>Delay</l2>: 1. <l0>Buff/Debuff/其他技能</l0><l1>Buff/Debuff/其他技能</l1><l2>Skills&BUFF/DEBUFF Spells</l2>: <input class="hvAANumber" name="delay" placeholder="200" type="text">ms 2. <l01>其他</l01><l2>Other</l2>: <input class="hvAANumber" name="delay2" placeholder="30" type="text">ms (',
@@ -2115,14 +2114,7 @@ try {
   };
 
   function resolveRemoteNotificationPriority(eventType) {
-    const option = g('option') || {};
-    const optionPriority = option.remoteNotificationPriority;
-    // UI only exposes 'default' and 'high'
-    if (optionPriority === 'high') {
-      return 'high';
-    }
-    // default: if user didn't choose high, fall back to event-based mapping if available,
-    // otherwise don't set priority (null) so services use their defaults
+    // 统一使用默认行为：重要事件自动为 high，其他事件不设置优先级
     return REMOTE_NOTIFICATION_PRIORITY_MAP[eventType] || null;
   }
 
