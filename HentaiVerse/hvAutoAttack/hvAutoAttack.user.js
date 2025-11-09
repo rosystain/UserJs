@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.22.12
+// @version      2.90.34.1
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -16,6 +16,8 @@
 // @include      http*://e-hentai.org/*
 // @connect        hentaiverse.org
 // @connect        e-hentai.org
+// @connect        api.telegram.org
+// @connect        *
 // @compatible   Firefox + Greasemonkey
 // @compatible   Chrome/Chromium + Tampermonkey
 // @compatible   Android + Firefox + Usi/Tampermonkey
@@ -44,6 +46,14 @@ const _1m = 60 * _1s;
 const _1h = 60 * _1m;
 const _1d = 24 * _1h;
 
+const monsterStateKeys = {
+  obj: `div.btm1`,
+  lv: `div.btm2`,
+  name: `div.btm3`,
+  bars: `div.btm4>div.btm5`,
+  buffs: `div.btm6`,
+}
+
 try {
   const isFrame = window.self !== window.top;
   if (isFrame) {
@@ -61,9 +71,9 @@ try {
   }
   try {
     if(window.location.href.startsWith('https://')) {
-      MAIN_URL = MAIN_URL.replace(/^http:/, /^https:/);
+      MAIN_URL = MAIN_URL.replace(/^http:/, 'https:');
     } else {
-      MAIN_URL = MAIN_URL.replace(/^https:/, /^http:/);
+      MAIN_URL = MAIN_URL.replace(/^https:/, 'http:');
     }
   } catch (e) {}
   const Debug = {
@@ -305,6 +315,12 @@ try {
       setPauseUI(box2);
       reloader();
       g('attackStatus', g('option').attackStatus);
+      for (let fightingStyle = 1; fightingStyle < 6; fightingStyle++) {
+        if(gE(`2${fightingStyle}01`)){
+          g('fightingStyle', fightingStyle.toString());
+        }
+      }
+
       g('timeNow', time(0));
       g('runSpeed', 1);
       Debug.log('______________newRound', false);
@@ -349,7 +365,8 @@ try {
       return;
     }
     gE('img[src*="startchallenge.png"]', 'all', document).forEach((btn) => {
-      const temp = btn.getAttribute('onclick').match(/init_battle\((\d+),\d+,'(.*?)'\)/);
+      const onclick = btn.getAttribute('onclick');
+      const temp = onclick.match(/init_battle\((\d+),\d+,'(.*?)'\)/) ?? onclick.match(/init_battle\((\d+),\d+\)/);
       if(ar.includes(temp[1])) {
         return;
       }
@@ -380,6 +397,32 @@ try {
         option[itemArray[0]] ??= {};
         option[itemArray[0]][itemArray[1]] ??= option[aliasDict[key]];
       }
+    }
+    // 迁移旧版本最后的慈悲条件为可配置条件
+    const mercifulBlowCondition = option.skillT3Condition ?? {"0":[]};
+    const size = Object.keys(mercifulBlowCondition).length;
+    if (option.mercifulBlowStrict){
+      option.mercifulBlow = false;
+      option.mercifulBlowStrict = false;
+      for(let id in mercifulBlowCondition){
+        const condition = mercifulBlowCondition[id];
+        condition.push("fightingStyle,5,2");
+        condition.push("targetHp,2,0.25");
+        condition.push("_targetBuffTurn_bleed,1,0");
+      }
+    } else if(option.mercifulBlow) {
+      option.mercifulBlow = false;
+      const newCondition = {};
+      for(let id in mercifulBlowCondition){
+        const condition = mercifulBlowCondition[id];
+        newCondition[id] = condition;
+        newCondition[(id*1+size).toString()] = [...condition];
+        newCondition[(id*1+size).toString()].push("fightingStyle,6,2");
+        condition.push("fightingStyle,5,2");
+        condition.push("targetHp,2,0.25");
+        condition.push("_targetBuffTurn_bleed,1,0");
+      }
+      option.skillT3Condition = newCondition;
     }
     if(isFrame){
       g('option', option);
@@ -428,6 +471,8 @@ try {
   function setPauseUI(parent) {
     setPauseButton(parent);
     setPauseHotkey();
+    setStepInButton(parent);
+    setStepInHotkey(parent);
   }
 
   function setPauseButton(parent) {
@@ -443,6 +488,7 @@ try {
     button.className = 'pauseChange';
     button.onclick = pauseChange;
   }
+
   function setPauseHotkey() {
     if (!g('option').pauseHotkey) {
       return;
@@ -453,6 +499,30 @@ try {
       }
       if (e.keyCode === g('option').pauseHotkeyCode) {
         pauseChange();
+      }
+    }, false);
+  }
+
+  function setStepInButton(parent) {
+    if (!g('option').stepInButton) {
+      return;
+    }
+    const button = parent.appendChild(cE('button'));
+    button.innerHTML = '<l0>步进</l0><l1>步進</l1><l2>StepIn</l2>';
+    button.className = 'stepIn';
+    button.onclick = stepIn;
+  }
+
+  function setStepInHotkey() {
+    if (!g('option').stepInHotkey) {
+      return;
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (e.keyCode === g('option').stepInHotkeyCode) {
+        stepIn();
       }
     }, false);
   }
@@ -516,11 +586,38 @@ try {
     return document.createElement(name);
   }
 
+  function getBuffTurnFromImg(buff, nanValue=NaN) {
+    if (!buff) {
+      return 0;
+    }
+    buff = buff.getAttribute('onmouseover').match(/\(.*,.*,(\s*)(.*?)\)$/)[2] * 1;
+    return isNaN(buff) ? nanValue : buff;
+  }
+
+  function getMonsterID(s) {
+    if (s.order !== undefined) {
+      return (s.order + 1) % 10;
+    } // case is monsterStatus
+    return (s + 1) % 10; // case is order
+  }
+
+  function getPlayerBuff(buff){
+    return gE(`#pane_effects>img[src*="${buff}"]`);
+  }
+
+  function getMonster(id){
+    return gE(`#mkey_${id}`);
+  }
+
+  function getMonsterBuff(id, buff){
+    return gE(`${monsterStateKeys.buffs}>img[src*="${buff}"]`, getMonster(id));
+  }
+
   function isOn(id) { // 是否可以施放技能/使用物品
     if (id * 1 > 10000) { // 使用物品
-      return gE(`.bti3>div[onmouseover*="${id}"]`);
+      return gE(`.bti3>div[onmouseover*="(${id})"]`);
     } // 施放技能
-    return (gE(id) && gE(id).style.opacity !== '0.5') ? gE(id) : false;
+    return gE(id) && (gE(id).style.opacity * 1 !== 0.5);
   }
 
   function setLocal(item, value) {
@@ -701,6 +798,7 @@ try {
       '.hvAACenter{text-align:center;}',
       '.hvAATitle{font-weight:bolder;}',
       '.hvAAGoto{cursor:pointer;text-decoration:underline;}',
+      '.customizeInput{width:193px}',
       '.hvAANew{width:25px;height:25px;float:left;background:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABkAAAAMCAYAAACX8hZLAAAAcElEQVQ4jbVRSQ4AIQjz/59mTiZIF3twmnCwFAq4FkeFXM+5vCzohYxjPMtfxS8CN6iqQ7TfE0wrODxVbzJNgoaTo4CmbBO1ZWICouQ0DHaL259MEzaU+w8pZOdSjcUgaPJDHCbO0A2kuAiuwPGQ+wBms12x8HExTwAAAABJRU5ErkJggg==) center no-repeat transparent;}',
       '#hvAATab-Alarm input[type="text"]{width:512px;}',
       '.testAlarms>div{border:2px solid #000;}',
@@ -737,8 +835,8 @@ try {
       '.tlbWARN{text-align:left;font-weight:bold;color:red;font-size:20pt;}', // 标记检测出异常的日志行
       // 怪物标号用数字替代字母，目前弃用
       // '#pane_monster{counter-reset:order;}',
-      // '.btm2>div:nth-child(1):before{font-size:23px;font-weight:bold;text-shadow:1px 1px 2px;content:counter(order);counter-increment:order;}',
-      // '.btm2>div:nth-child(1)>img{display:none;}',
+      // `${monsterStateKeys.lv}>div:nth-child(1):before{font-size:23px;font-weight:bold;text-shadow:1px 1px 2px;content:counter(order);counter-increment:order;}`,
+      // `${monsterStateKeys.lv}>div:nth-child(1)>img{display:none;}`,
     ].join('');
     globalStyle.textContent = cssContent;
     optionButton(lang);
@@ -800,11 +898,20 @@ try {
       '  <div><b><l0>脚本行为</l0><l1>腳本行為</l1><l2>Script Activity</l2></b>',
       '    <div><l0>暂停相关</l0><l1>暫停相關</l1><l2>Pause with</l2>: ',
       '      <input id="pauseButton" type="checkbox"><label for="pauseButton"><l0>使用按钮</l0><l1>使用按鈕</l1><l2>Button</l2></label>; ',
-      '      <input id="pauseHotkey" type="checkbox"><label for="pauseHotkey"><l0>使用热键</l0><l1>使用熱鍵</l1><l2>Hotkey</l2>: <input name="pauseHotkeyStr" style="width:30px;" type="text"><input class="hvAANumber" name="pauseHotkeyCode" type="hidden" disabled="true"></label></div>',
+      '      <input id="pauseHotkey" type="checkbox"><label for="pauseHotkey"><l0>使用热键</l0><l1>使用熱鍵</l1><l2>Hotkey</l2>: <input name="pauseHotkeyStr" style="width:30px;" type="text"><input class="hvAANumber" name="pauseHotkeyCode" type="hidden" disabled="true"></label><br>',
+      '      <input id="stepInButton" type="checkbox"><label for="stepInButton"><l0>步进按钮</l0><l1>步進按鈕</l1><l2>StepIn Button</l2></label>; ',
+      '      <input id="stepInHotkey" type="checkbox"><label for="stepInHotkey"><l0>使用热键</l0><l1>使用熱鍵</l1><l2>StepIn Hotkey</l2>: <input name="stepInHotkeyStr" style="width:30px;" type="text"><input class="hvAANumber" name="stepInHotkeyCode" type="hidden" disabled="true"></label>',
+      '  </div>',
       '    <div><l0>警告相关</l0><l1>警告相關</l1><l2>To Warn</l2>: ',
       '      <input id="alert" type="checkbox"><label for="alert"><l0>音频警报</l0><l1>音頻警報</l1><l2>Audio Alarms</l2></label>; ',
       '      <input id="notification" type="checkbox"><label for="notification"><l0>桌面通知</l0><l1>桌面通知</l1><l2>Notifications</l2></label> ',
       '      <button class="testNotification"><l0>预处理</l0><l1>預處理</l1><l2>Pretreat</l2></button></div>',
+      '    <div><input id="enableRemoteNotification" type="checkbox"><label for="enableRemoteNotification"><l0>启用远程通知</l0><l1>啟用遠程通知</l1><l2>Enable Remote Notification</l2></label></div>',
+      '    <div style="margin-left: 20px;"><l0>Telegram Bot Token</l0><l1>Telegram Bot Token</l1><l2>Telegram Bot Token</l2>: <input name="telegramBotToken" style="width:400px;" type="text" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"></div>',
+      '    <div style="margin-left: 20px;"><l0>Telegram Chat ID</l0><l1>Telegram Chat ID</l1><l2>Telegram Chat ID</l2>: <input name="telegramChatId" style="width:200px;" type="text" placeholder="123456789"></div>',
+      '    <div style="margin-left: 20px;"><l0>Apprise 服务器地址</l0><l1>Apprise 服務器地址</l1><l2>Apprise Server URL</l2>: <input name="appriseUrl" style="width:400px;" type="text" placeholder="http://localhost:8000"></div>',
+      '    <div style="margin-left: 20px;"><l0>Apprise 通知URLs (逗号分隔)</l0><l1>Apprise 通知URLs (逗號分隔)</l1><l2>Apprise Notification URLs (comma separated)</l2>: <input name="appriseUrls" style="width:400px;" type="text" placeholder="tgram://bottoken/ChatID"></div>',
+      '    <div><button class="testRemoteNotification"><l0>测试远程通知</l0><l1>測試遠程通知</l1><l2>Test Remote Notification</l2></button></div>',
       '    <div><l0>掉落及数据记录</l0><l1>掉落及數據記錄</l1><l2>Drops and Usage Tracking</l2>: <input id="recordEach" type="checkbox"><label for="recordEach"><l0>单独记录每场战役</l0><l1>單獨記錄每場戰役</l1><l2>Record each battle separately</l2></label></div>',
       '    <div><l0>延迟</l0><l1>延遲</l1><l2>Delay</l2>: 1. <l0>Buff/Debuff/其他技能</l0><l1>Buff/Debuff/其他技能</l1><l2>Skills&BUFF/DEBUFF Spells</l2>: <input class="hvAANumber" name="delay" placeholder="200" type="text">ms 2. <l01>其他</l01><l2>Other</l2>: <input class="hvAANumber" name="delay2" placeholder="30" type="text">ms (',
       '      <l0>说明: 单位毫秒，且在设定值基础上取其的50%-150%进行延迟，0表示不延迟</l0><l1>說明: 單位毫秒，且在設定值基礎上取其的50%-150%進行延遲，0表示不延遲</l1><l2>Note: unit milliseconds, and based on the set value multiply 50% -150% to delay, 0 means no delay</l2>)</div>',
@@ -850,7 +957,7 @@ try {
       '  </div>',
 
       '<div class="hvAATab" id="hvAATab-BattleStarter">',
-      ' <div><input id="encounter" type="checkbox"><label for="encounter"><b><l0>自动遭遇战</l0><l1>自動遭遇戰</l1><l2>Auto Encounter</l2></b></label><input id="encounterQuickCheck" type="checkbox"><label for="encounterQuickCheck"><l0>精准倒计时(影响性能)</l0><l1>精準(影響性能)</l1><l2>Precise encounter cd(might reduced performsance)</l2></label></div>',
+      ' <div><input id="encounter" type="checkbox"><label for="encounter"><b><l0>自动遭遇战</l0><l1>自動遭遇戰</l1><l2>Auto Encounter</l2></b></label><input id="encounterQuickCheck" type="checkbox"><label for="encounterQuickCheck"><l0>精准倒计时(影响性能)</l0><l1>精準(影響性能)</l1><l2>Precise encounter cd(might reduced performsance)</l2></label><input id="encounterDisplay" type="checkbox"><label for="encounterDisplay"><l0>不自动遭遇时显示倒计时</l0><l1>不自動遭遇時顯示倒計時</l1><l2>Display CountDown While Not Auto Encounter</l2></label></div>',
       '  <div><input id="idleArena" type="checkbox"><label for="idleArena"><b><l0>闲置竞技场</l0><l1>閒置競技場</l1><l2>Idle Arena</l2>: </b>',
       '    <l0>在任意页面停留</l0><l1>在任意頁面停留</l1><l2>Idle in any page for </l2><input class="hvAANumber" name="idleArenaTime" type="text"><l0>秒后，开始竞技场</l0><l1>秒後，開始競技場</l1><l2>s, start Arena</l2></label> <button class="idleArenaReset"><l01>重置</l01><l2>Reset</l2></button>;<br>',
       '    <l0>进行的竞技场相对应等级</l0><l1>進行的競技場相對應等級</l1><l2>The levels of the Arena you want to complete</l2>:  ',
@@ -861,15 +968,17 @@ try {
       '        <input id="arLevel_120" value="120,20" type="checkbox"><label for="arLevel_120">120</label> <input id="arLevel_130" value="130,21" type="checkbox"><label for="arLevel_130">130</label> <input id="arLevel_140" value="140,23" type="checkbox"><label for="arLevel_140">140</label> <input id="arLevel_150" value="150,24" type="checkbox"><label for="arLevel_150">150</label> <input id="arLevel_165" value="165,26" type="checkbox"><label for="arLevel_165">165</label> <input id="arLevel_180" value="180,27" type="checkbox"><label for="arLevel_180">180</label> <input id="arLevel_200" value="200,28" type="checkbox"><label for="arLevel_200">200</label> <input id="arLevel_225" value="225,29" type="checkbox"><label for="arLevel_225">225</label> <input id="arLevel_250" value="250,32" type="checkbox"><label for="arLevel_250">250</label> <input id="arLevel_300" value="300,33" type="checkbox"><label for="arLevel_300">300</label> <input id="arLevel_400" value="400,34" type="checkbox"><label for="arLevel_400">400</label> <input id="arLevel_500" value="500,35" type="checkbox"><label for="arLevel_500">500</label>',
       '        <input id="arLevel_RB50" value="RB50,105" type="checkbox"><label for="arLevel_RB50">RB50</label> <input id="arLevel_RB75A" value="RB75A,106" type="checkbox"><label for="arLevel_RB75A">RB75A</label> <input id="arLevel_RB75B" value="RB75B,107" type="checkbox"><label for="arLevel_RB75B">RB75B</label> <input id="arLevel_RB75C" value="RB75C,108" type="checkbox"><label for="arLevel_RB75C">RB75C</label>',
       '        <input id="arLevel_RB100" value="RB100,109" type="checkbox"><label for="arLevel_RB100">RB100</label> <input id="arLevel_RB150" value="RB150,110" type="checkbox"><label for="arLevel_RB150">RB150</label> <input id="arLevel_RB200" value="RB200,111" type="checkbox"><label for="arLevel_RB200">RB200</label> <input id="arLevel_RB250" value="RB250,112" type="checkbox"><label for="arLevel_RB250">RB250</label> <input id="arLevel_GF" value="GF,gr" type="checkbox"><label for="arLevel_GF" >GrindFest </label><input class="hvAANumber" name="idleArenaGrTime" placeholder="1" type="text"></div><div><input id="obscureNotIdleArena" type="checkbox"><label for="obscureNotIdleArena"><l0>页面中置灰未设置且未完成的</l0><l1>頁面中置灰未設置且未完成的</l1><l2>obscure not setted and not battled in Battle&gt;Arena/RingOfBlood</l2></div></div>',
-      '  <div style="display: flex; flex-flow: wrap;">',
-      '      <div><b><l0>精力</l0><l1>精力</l1><l2>Stamina</l2>: </b><l0>阈值</l0><l1>閾值</l1><l2><b></b> threshold</l2>: Min(85, <input class="hvAANumber" name="staminaLow" placeholder="60" type="text">); </div>',
-      '      <div><l0>含本日自然恢复的阈值<l1>含本日自然恢復的閾值</l1><l2><b></b>Stamina threshold with naturally recovers today.</l2>: <input class="hvAANumber" name="staminaLowWithReNat" placeholder="0" type="text">; </div>',
-      '      <div><input id="restoreStamina" type="checkbox"><label for="restoreStamina"><l0>战前恢复</l0><l1>戰前恢復</l1><l2>Restore stamina</l2>; </div>',
-      '      <div><l0>进入遭遇战的最低精力<l1>進入遭遇戰的最低精力</l1><l2><b></b>Minimum stamina to engage encounter</l2>: <input class="hvAANumber" name="staminaEncounter" placeholder="60" type="text"></div>',
+      '  <div>',
+      '      <b>[S!]<l0>精力</l0><l1>精力</l1><l2>Stamina</l2>: </b>',
+      '      <l0>进入遭遇战的最低精力</l0><l1>進入遭遇戰的最低精力</l1><l2><b></b>Minimum stamina to engage encounter</l2>: <input class="hvAANumber" name="staminaEncounter" placeholder="60" type="text"></br>',
+      '      <l0>竞技场/浴血擂台阈值</l0><l1>競技場/浴血擂台閾值</l1><l2><b></b>Minimum stamina to auto start The Arena or Ring Of Blood</l2>: Min(85, <input class="hvAANumber" name="staminaLow" placeholder="60" type="text">)<br>',
+      '      <l0>进入压榨届的最低精力</l0><l1>進入壓榨屆的最低精力</l1><l2><b></b>Minimum stamina to auto start GrindFest</l2>: <input class="hvAANumber" name="staminaGrindFest" placeholder="100" type="text"></br>',
+      '      <b>[S!!]</b><l0>进入竞技场/浴血擂台/压榨届时，含本日自然恢复的阈值</l0><l1>进入競技場/浴血擂台/壓榨屆时，含本日自然恢復的閾值</l1><l2><b></b>Stamina threshold with naturally recovers today for The Arena, Ring Of Bloog, GrindFest</l2>: <input class="hvAANumber" name="staminaLowWithReNat" placeholder="0" type="text"></br>',
+      '      <input id="restoreStamina" type="checkbox"><label for="restoreStamina"><l0>战前恢复</l0><l1>戰前恢復</l1><l2>Restore stamina</l2>',
       '  </div>',
-      '  <div><input id="repair" type="checkbox"><label for="repair"><b><l0>修复装备</l0><l1>修復裝備</l1><l2>Repair Equipment</l2></b></label>: ',
+      '  <div><input id="repair" type="checkbox"><label for="repair"><b>[R!]<l0>修复装备</l0><l1>修復裝備</l1><l2>Repair Equipment</l2></b></label>: ',
       '    <l0>耐久度</l0><l1>耐久度</l1><l2>Durability</l2> ≤ <input class="hvAANumber" name="repairValue" type="text">%</div>',
-      '  <div><input id="checkSupply" type="checkbox"><b><l0>检查物品库存</l0><l1>檢查物品庫存</l1><l2>Check is item needs supply</l2></b>: ',
+      '  <div><input id="checkSupply" type="checkbox"><b>[C!]<l0>检查物品库存</l0><l1>檢查物品庫存</l1><l2>Check is item needs supply</l2></b>: ',
       '  <div class="hvAAcheckItems">',
       '  <input id="isCheck_11191" type="checkbox"><input class="hvAANumber" name="checkItem_11191" placeholder="0" type="text"><l0>体力药水</l0><l1>體力藥水</l1><l2>Health Potion</l2>',
       '  <input id="isCheck_11195" type="checkbox"><input class="hvAANumber" name="checkItem_11195" placeholder="0" type="text"><l0>体力长效药</l0><l1>體力長效藥</l1><l2>Health Draught</l2>',
@@ -1014,8 +1123,8 @@ try {
       '    <input id="debuffSkillOrder_Dr" type="checkbox"><label for="debuffSkillOrder_Dr"><l0>枯竭(Dr)</l0><l1>枯竭(Dr)</l1><l2>Drain</l2></label>',
       '    <input id="debuffSkillOrder_We" type="checkbox"><label for="debuffSkillOrder_We"><l0>虚弱(We)</l0><l1>虛弱(We)</l1><l2>Weaken</l2></label>',
       '    <input id="debuffSkillOrder_Co" type="checkbox"><label for="debuffSkillOrder_Co"><l0>混乱(Co)</l0><l1>混亂(Co)</l1><l2>Confuse</l2></label></div>',
-      '  <div><l01>特殊</l01><l2>Special</l2><input id="debuffSkillWeAll" type="checkbox"><label for="debuffSkillWeAll"><l0>先给所有敌人上虚弱(We)</l0><l1>先給所有敵人上虛弱(We)</l1><l2>Weakened all enemies first.</l2></label></div>{{debuffSkillWeAllCondition}}',
-      '  <div><l01>特殊</l01><l2>Special</l2><input id="debuffSkillImAll" type="checkbox"><label for="debuffSkillImAll"><l0>先给所有敌人上陷危(Im)</l0><l1>先給所有敵人上陷危(Im)</l1><l2>Imperiled all enemies first.</l2></label></div>{{debuffSkillImAllCondition}}',
+      '  <div><l01>特殊</l01><l2>Special</l2><input id="debuffSkillWeAll" type="checkbox"><label for="debuffSkillWeAll"><l0>先给所有敌人上虚弱(We)</l0><l1>先給所有敵人上虛弱(We)</l1><l2>Weakened all enemies first.</l2></label><input id="debuffSkillWeAllByIndex" type="checkbox"><label for="debuffSkillWeAllByIndex"><l0>按照顺序而非权重</l0><l1>按照順序而非權重</l1><l2>By index instead weight</l2></label></div>{{debuffSkillWeAllCondition}}',
+      '  <div><l01>特殊</l01><l2>Special</l2><input id="debuffSkillImAll" type="checkbox"><label for="debuffSkillImAll"><l0>先给所有敌人上陷危(Im)</l0><l1>先給所有敵人上陷危(Im)</l1><l2>Imperiled all enemies first.</l2></label><input id="debuffSkillImAllByIndex" type="checkbox"><label for="debuffSkillImAllByIndex"><l0>按照顺序而非权重</l0><l1>按照順序而非權重</l1><l2>By index instead weight</l2></label></div>{{debuffSkillImAllCondition}}',
       '    <div><input id="debuffSkill_Sle" type="checkbox"><label for="debuffSkill_Sle"><l0>沉眠(Sl)</l0><l1>沉眠(Sl)</l1><l2>Sleep</l2></label>{{debuffSkillSleCondition}}</div>',
       '    <div><input id="debuffSkill_Bl" type="checkbox"><label for="debuffSkill_Bl"><l0>致盲(Bl)</l0><l1>致盲(Bl)</l1><l2>Blind</l2></label>{{debuffSkillBlCondition}}</div>',
       '    <div><input id="debuffSkill_Slo" type="checkbox"><label for="debuffSkill_Slo"><l0>缓慢(Slo)</l0><l1>緩慢(Slo)</l1><l2>Slow</l2></label>{{debuffSkillSloCondition}}</div>',
@@ -1034,8 +1143,7 @@ try {
       '  <input id="skillOrder_OFC" type="checkbox"><label for="skillOrder_OFC"><l0>友情小马砲</l0><l1>友情小馬砲</l1><l2>OFC</l2></label><input id="skillOrder_FRD" type="checkbox"><label for="skillOrder_FRD"><l0>龙吼</l0><l1>龍吼</l1><l2>FRD</l2></label><input id="skillOrder_T3" type="checkbox"><label for="skillOrder_T3">T3</label><input id="skillOrder_T2" type="checkbox"><label for="skillOrder_T2">T2</label><input id="skillOrder_T1" type="checkbox"><label for="skillOrder_T1">T1</label></div>',
       '  <div><input id="skill_OFC" type="checkbox"><label for="skill_OFC"><l0>友情小马砲</l0><l1>友情小馬砲</l1><l2>OFC</l2></label>: <input id="skillOTOS_OFC" type="checkbox"><label for="skillOTOS_OFC"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label>{{skillOFCCondition}}</div>',
       '  <div><input id="skill_FRD" type="checkbox"><label for="skill_FRD"><l0>龙吼</l0><l1>龍吼</l1><l2>FRD</l2></label>: <input id="skillOTOS_FRD" type="checkbox"><label for="skillOTOS_FRD"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label>{{skillFRDCondition}}</div>',
-      '  <div><l0>战斗风格</l0><l1>戰鬥風格</l1><l2>Fighting style</l2>: <select name="fightingStyle"><option value="1">二天一流 / Niten Ichiryu</option><option value="2">单手 / One-Handed</option><option value="3">双手 / 2-Handed Weapon</option><option value="4">双持 / Dual Wielding</option><option value="5">法杖 / Staff</option></select></div>',
-      '  <div><input id="skill_T3" type="checkbox"><label for="skill_T3"><l0>3阶（如果有）</l0><l1>3階（如果有）</l1><l2>T3(if exist)</l2></label>: <input id="skillOTOS_T3" type="checkbox"><label for="skillOTOS_T3"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label><br><input id="mercifulBlow" type="checkbox"><label for="mercifulBlow"><l0>最后的慈悲(MB)：优先攻击满足条件的敌人 (25% HP, 流血)</l0><l1>最後的慈悲(MB)：優先攻擊滿足條件的敵人 (25% HP, 流血)</l1><l2>Merciful Blow: Attack the enemy which has 25% HP and is bleeding first</l2></label>{{skillT3Condition}}</div>',
+      '  <div><input id="skill_T3" type="checkbox"><label for="skill_T3"><l0>3阶（如果有）</l0><l1>3階（如果有）</l1><l2>T3(if exist)</l2></label>: <input id="skillOTOS_T3" type="checkbox"><label for="skillOTOS_T3"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label><br>{{skillT3Condition}}</div>',
       '  <div><input id="skill_T2" type="checkbox"><label for="skill_T2"><l0>2阶（如果有）</l0><l1>2階（如果有）</l1><l2>T2(if exist)</l2></label>: <input id="skillOTOS_T2" type="checkbox"><label for="skillOTOS_T2"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label>{{skillT2Condition}}</div>',
       '  <div><input id="skill_T1" type="checkbox"><label for="skill_T1"><l0>1阶</l0><l1>1階</l1><l2>T1</l2></label>: <input id="skillOTOS_T1" type="checkbox"><label for="skillOTOS_T1"><l01>一回合只使用一次</l01><l2>One round only spell one time</l2></label>{{skillT1Condition}}</div></div>',
 
@@ -1080,9 +1188,9 @@ try {
       '  </div>',
       '  <div>3. PW(X) += Log10(1 + <l0>武器攻击中央目标伤害倍率(副手及冲击技能)</l0><l1>乘以武器攻擊中央目標傷害倍率(副手及衝擊技能)</l1><l2>Weapon Attack Central Target Damage Ratio (Offhand & Strike)</l2>)<br><l0>额外伤害比例：</l0><l1>額外傷害比例：</l1><l2>Extra DMG Ratio: </l2><input class="hvAANumber" name="centralExtraRatio" placeholder="0" type="text">%</div>',
       '  <div>4. <l0>优先选择权重最低的目标</l0><l1>優先選擇權重最低的目標</l1><l2>Choose target with lowest rank first</l2><br><l0>BOSS:Yggdrasil额外权重</l0><l1>BOSS:Yggdrasil額外權重</l1><l2>BOSS:Yggdrasil Extra Weight</l2><input class="hvAANumber" name="YggdrasilExtraWeight" placeholder="-1000" type="text" style="width:40px"></div>',
-      '  <div><l0>显示权重及顺序</l0><l1>顯示權重及順序</l1><l2>DIsplay Weight and order</l2><input id="displayWeight" type="checkbox">',
-      '  <l0>显示优先级背景色</l0><l1>顯示優先級背景色</l1><l2>DIsplay Priority Background Color</l2><input id="displayWeightBackground" type="checkbox">',
-      '  <l0>CSS格式或可eval执行的公式（可用&lt;rank&gt;, &lt;all&gt;指代优先级和总优先级数量, &lt;style_x&gt;指代第x个的相同配置值），例如：</l0><l1>CSS格式或可eval執行的公式（可用&lt;rank&gt;, &lt;all&gt;指代優先級和總優先級數量, &lt;style_x&gt;指代第x個的相同配置值）：例如</l1><l2>CSS or eval executable formula(use &lt;rank&gt; and &lt;all&gt; to refer to priority rank and total rank count, &lt;style_x&gt; to refer to the same option value of option No.x)Such as: </l2><br>`hsl(${Math.round(240*&lt;rank&gt;/Math.max(1,&lt;all&gt;-1))}deg 50% 50%)`<br>',
+      '  <div><input id="displayWeight" type="checkbox"><l0>显示权重及顺序</l0><l1>顯示權重及順序</l1><l2>DIsplay Weight and order</l2>',
+      '  <input id="displayWeightBackground" type="checkbox"><l0>显示优先级背景色</l0><l1>顯示優先級背景色</l1><l2>DIsplay Priority Background Color</l2>',
+      '  </br><l0>CSS格式或可eval执行的公式（可用&lt;rank&gt;, &lt;all&gt;指代优先级和总优先级数量, &lt;style_x&gt;指代第x个的相同配置值），例如：</l0><l1>CSS格式或可eval執行的公式（可用&lt;rank&gt;, &lt;all&gt;指代優先級和總優先級數量, &lt;style_x&gt;指代第x個的相同配置值）：例如</l1><l2>CSS or eval executable formula(use &lt;rank&gt; and &lt;all&gt; to refer to priority rank and total rank count, &lt;style_x&gt; to refer to the same option value of option No.x)Such as: </l2><br>`hsl(${Math.round(240*&lt;rank&gt;/Math.max(1,&lt;all&gt;-1))}deg 50% 50%)`<br>',
       '   1. <input class="customizeInput" name="weightBackground_1" type="text"><br>',
       '   2. <input class="customizeInput" name="weightBackground_2" type="text">',
       '   3. <input class="customizeInput" name="weightBackground_3" type="text">',
@@ -1301,18 +1409,27 @@ try {
       }
       g('customizeTarget', target);
       const position = target.getBoundingClientRect();
+      const bodyPosition = document.body.getBoundingClientRect();
       gE('.customizeBox').style.zIndex = 5;
-      gE('.customizeBox').style.top = `${position.bottom + window.scrollY}px`;
-      gE('.customizeBox').style.left = `${position.left + window.scrollX}px`;
+      gE('.customizeBox').style.top = `${position.bottom - bodyPosition.top}px`;
+      gE('.customizeBox').style.left = `${position.left - bodyPosition.left}px`;
     };
     // 标签页-主要选项
     gE('input[name="pauseHotkeyStr"]', optionBox).onkeyup = function (e) {
       this.value = (/^[a-z]$/.test(e.key)) ? e.key.toUpperCase() : e.key;
       gE('input[name="pauseHotkeyCode"]', optionBox).value = e.keyCode;
     };
+    gE('input[name="stepInHotkeyStr"]', optionBox).onkeyup = function (e) {
+      this.value = (/^[a-z]$/.test(e.key)) ? e.key.toUpperCase() : e.key;
+      gE('input[name="stepInHotkeyCode"]', optionBox).value = e.keyCode;
+    };
     gE('.testNotification', optionBox).onclick = function () {
       _alert(0, '接下来开始预处理。\n如果询问是否允许，请选择允许', '接下來開始預處理。\n如果詢問是否允許，請選擇允許', 'Now, pretreat.\nPlease allow to receive notifications if you are asked for permission');
       setNotification('Test');
+    };
+    gE('.testRemoteNotification', optionBox).onclick = function () {
+      _alert(0, '接下来将测试远程通知功能\n请检查您的Telegram或其他通知渠道', '接下來將測試遠程通知功能\n請檢查您的Telegram或其他通知渠道', 'Now testing remote notification\nPlease check your Telegram or other notification channels');
+      sendRemoteNotification('Test', '这是一条测试消息\nThis is a test message\n這是一條測試消息');
     };
     gE('.testPopup', optionBox).onclick = function () {
       _alert(0, '接下来开始预处理。\n关闭本警告框之后，请切换到其他标签页，\n并在足够长的时间后再打开本标签页', '接下來開始預處理。\n關閉本警告框之後，請切換到其他標籤頁，\n並在足夠長的時間後再打開本標籤頁', 'Now, pretreat.\nAfter dismissing this alert, focus other tab,\nfocus this tab again after long time.');
@@ -1603,7 +1720,13 @@ try {
           }
         } else if (inputs[i].type === 'text' || inputs[i].type === 'hidden') {
           itemName = inputs[i].name;
-          itemValue = inputs[i].value || inputs[i].placeholder;
+          // 避免将占位符当作真实配置保存：这些字段为空即视为未配置
+          const skipPlaceholderNames = ['telegramBotToken', 'telegramChatId', 'appriseUrl', 'appriseUrls'];
+          if (skipPlaceholderNames.includes(itemName)) {
+            itemValue = inputs[i].value; // 不使用 placeholder 作为回退
+          } else {
+            itemValue = inputs[i].value || inputs[i].placeholder;
+          }
           if (itemValue === '') {
             continue;
           }
@@ -1747,11 +1870,18 @@ try {
       '<option value="roundAll">roundAll</option>',
       '<option value="roundLeft">roundLeft</option>',
       '<option value="roundType">roundType</option>',
-      '<option value="attackStatus">attackStatus</option>',
       '<option value="turn">turn</option>',
+      '<option value="">- - - -</option>',
+      '<option value="attackStatus">attackStatus</option>',
+      '<option value="fightingStyle">fightingStyle</option>',
       '<option value="">- - - -</option>',
       '<option value="_isCd_">isCd</option>',
       '<option value="_buffTurn_">buffTurn</option>',
+      '<option value="">- - - -</option>',
+      '<option value="_targetBuffTurn_">targetBuffTurn</option>',
+      '<option value="targetHp">targetHp</option>',
+      '<option value="targetMp">targetMp</option>',
+      '<option value="targetSp">targetSp</option>',
       '<option value=""></option>',
     ].join('');
     customizeBox.innerHTML = [
@@ -1940,6 +2070,10 @@ try {
         },
       },
     ][g('lang')][e];
+    
+    // 发送远程通知（Telegram或Apprise）
+    sendRemoteNotification(e, notification.text);
+    
     if (typeof GM_notification !== 'undefined') {
       GM_notification({
         text: notification.text,
@@ -1973,13 +2107,100 @@ try {
     }
   }
 
-  function checkCondition(parms) {
-    if (typeof parms === 'undefined') {
-      return true;
+  // 远程通知功能（Telegram和Apprise）
+  function sendRemoteNotification(eventType, message) {
+    if (!g('option').enableRemoteNotification) {
+      return;
     }
-    let i; let j; let
-    k;
-    const result = [];
+    
+    const title = `HV Auto Attack - ${eventType}`;
+    
+    // 发送 Telegram 通知
+    if (g('option').telegramBotToken && g('option').telegramChatId) {
+      sendTelegramNotification(title, message);
+    }
+    
+    // 发送 Apprise 通知
+    if (g('option').appriseUrl && g('option').appriseUrls) {
+      sendAppriseNotification(title, message);
+    }
+  }
+  
+  function sendTelegramNotification(title, message) {
+    const botToken = g('option').telegramBotToken;
+    const chatId = g('option').telegramChatId;
+    
+    if (!botToken || !chatId) {
+      return;
+    }
+    
+    const text = `*${title}*\n\n${message}`;
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url: url,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      data: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'Markdown'
+      }),
+      onload: function(response) {
+        if (response.status === 200) {
+          console.log('Telegram notification sent successfully');
+        } else {
+          console.error('Failed to send Telegram notification:', response.statusText);
+        }
+      },
+      onerror: function(error) {
+        console.error('Error sending Telegram notification:', error);
+      }
+    });
+  }
+  
+  function sendAppriseNotification(title, message) {
+    const appriseUrl = g('option').appriseUrl;
+    const appriseUrls = g('option').appriseUrls;
+    
+    if (!appriseUrl || !appriseUrls) {
+      return;
+    }
+    
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url: `${appriseUrl}/notify`,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      data: JSON.stringify({
+        urls: appriseUrls.split(',').map(u => u.trim()),
+        title: title,
+        body: message,
+        type: 'info'
+      }),
+      onload: function(response) {
+        if (response.status === 200) {
+          console.log('Apprise notification sent successfully');
+        } else {
+          console.error('Failed to send Apprise notification:', response.statusText);
+        }
+      },
+      onerror: function(error) {
+        console.error('Error sending Apprise notification:', error);
+      }
+    });
+  }
+
+  function checkCondition(parms, targets=undefined) {
+    let i; let j; let k; let target;
+
+    targets ??= [g('battle').monsterStatus[0]];
+    if (typeof parms === 'undefined') {
+      return targets[0];
+    }
     const returnValue = function (str) {
       if (str.match(/^_/)) {
         const arr = str.split('_');
@@ -1991,7 +2212,7 @@ try {
         let result;
         for (let key of paramList) {
           if (!result) {
-            result = (g('battle') ?? getValue('battle', true))[key] ?? g(key) ?? getValue(key);
+            result = (g('battle') ?? getValue('battle', true))[key] ?? g(key) ?? getValue(key) ?? g('option')?.[key];
             continue;
           }
           result = result[key]
@@ -2001,65 +2222,79 @@ try {
       return str * 1;
     };
     var func = {
-      isCd(id) {
-        return isOn(id) ? 0 : 1;
+      isCd(id) { // is cool down done
+        return isOn(id) ? 1 : 0;
       },
       buffTurn(img) {
-        let buff = gE(`#pane_effects>img[src*="${img}"]`);
-        if (!buff) {
-          return 0;
-        }
-        buff = buff.getAttribute('onmouseover').match(/\(.*,.*, (.*?)\)$/)[1] * 1;
-        return isNaN(buff) ? Infinity : buff;
+        return getBuffTurnFromImg(getPlayerBuff(img), 0);
+      },
+      targetBuffTurn(img){
+        return getBuffTurnFromImg(getMonsterBuff(getMonsterID(target), img), 0);
+      },
+      targetHp(){
+        return target.hpNow/target.hp;
+      },
+      targetMp(){
+        return target.mpNow;
+      },
+      targetSp(){
+        return target.spNow;
       },
     };
-
     for (i in parms) {
-      for (j = 0; j < parms[i].length; j++) {
-        if (!Array.isArray(parms[i])) {
+      for (target of targets){
+        if (target.isDead) {
           continue;
         }
-        k = parms[i][j].split(',');
-        const kk = k.toString();
-        k[0] = returnValue(k[0]);
-        k[2] = returnValue(k[2]);
+        let parmResult = true;
+        for (j = 0; j < parms[i].length; j++) {
+          let result = true;
+          if (!Array.isArray(parms[i])) {
+            continue;
+          }
+          k = parms[i][j].split(',');
+          const kk = k.toString();
+          k[0] = returnValue(k[0]);
+          k[2] = returnValue(k[2]);
 
-        if (k[0] === undefined || k[0] === null || (typeof k[0] !== "string" && isNaN(k[0]))) {
-          Debug.log(kk[0], k[0]);
-        }
-        if (k[2] === undefined || k[2] === null || (typeof k[2] !== "string" && isNaN(k[2]))) {
-          Debug.log(kk[2], k[2]);
-        }
+          if (k[0] === undefined || k[0] === null || (typeof k[0] !== "string" && isNaN(k[0]))) {
+            Debug.log(kk[0], k[0]);
+          }
+          if (k[2] === undefined || k[2] === null || (typeof k[2] !== "string" && isNaN(k[2]))) {
+            Debug.log(kk[2], k[2]);
+          }
 
-        switch (k[1]) {
-          case '1':
-            result[i] = k[0] > k[2];
+          switch (k[1]) {
+            case '1':
+              result = k[0] > k[2];
+              break;
+            case '2':
+              result = k[0] < k[2];
+              break;
+            case '3':
+              result = k[0] >= k[2];
+              break;
+            case '4':
+              result = k[0] <= k[2];
+              break;
+            case '5':
+              result = k[0] === k[2];
+              break;
+            case '6':
+              result = k[0] !== k[2];
+              break;
+          }
+          if (!result) {
+            parmResult = false;
             break;
-          case '2':
-            result[i] = k[0] < k[2];
-            break;
-          case '3':
-            result[i] = k[0] >= k[2];
-            break;
-          case '4':
-            result[i] = k[0] <= k[2];
-            break;
-          case '5':
-            result[i] = k[0] === k[2];
-            break;
-          case '6':
-            result[i] = k[0] !== k[2];
-            break;
+          }
         }
-        if (result[i] === false) {
-          j = parms[i].length;
+        if (parmResult){
+          return target;
         }
-      }
-      if (result[i] === true) {
-        return true;
       }
     }
-    return false;
+    return undefined;
   }
 
   // 答题//
@@ -2202,6 +2437,19 @@ try {
     let dict = {};
     for (let e of current) {
       dict[e.href ?? `newDawn`] = e;
+    }
+    try {
+      // if is latest version data
+      for (let e of encounter) {}
+    } catch {
+      // if old versions
+      const last = encounter.lastTime;
+      const times = encounter.time;
+      encounter = [];
+      for (let i = 0; i <= times; i++) {
+        encounter.unshift({ href: i===0 ? undefined : i, time: last, encountered: i===0 ? undefined : time(0) });
+      }
+      setEncounter(encounter);
     }
     for (let e of encounter) {
       const key = e.href ?? `newDawn`;
@@ -2373,16 +2621,38 @@ try {
       return await asyncCheckRepair();
     }
     logSwitchAsyncTask(arguments);
-    const doc = $doc(await $ajax.fetch('?s=Forge&ss=re'));
-    const json = JSON.parse((await $ajax.fetch(gE('#mainpane>script[src]', doc).src)).match(/{.*}/)[0]);
-    const eqps = (await Promise.all(Array.from(gE('.eqp>[id]', 'all', doc)).map(async eqp => { try {
-      const id = eqp.id.match(/\d+/)[0];
-      const condition = 1 * json[id].d.match(/Condition: \d+ \/ \d+ \((\d+)%\)/)[1];
-      if (condition > g('option').repairValue) {
-        return;
-      }
-      return gE('.messagebox_error', $doc(await $ajax.fetch(`?s=Forge&ss=re`, `select_item=${id}`)))?.innerText ? undefined : id;
-    } catch (e) {console.error(e)}}))).filter(e => e);
+    var eqps;
+    if(!isIsekai){
+      var doc = $doc(await $ajax.fetch('?s=Forge&ss=re'));
+      const json = JSON.parse((await $ajax.fetch(gE('#mainpane>script[src]', doc).src)).match(/{.*}/)[0]);
+      eqps = (await Promise.all(Array.from(gE('.eqp>[id]', 'all', doc)).map(async eqp => { try {
+        const id = eqp.id.match(/\d+/)[0];
+        const condition = 1 * json[id].d.match(/Condition: \d+ \/ \d+ \((\d+)%\)/)[1];
+        if (condition > g('option').repairValue) {
+          return;
+        }
+        return gE('.messagebox_error', $doc(await $ajax.fetch(`?s=Forge&ss=re`, `select_item=${id}`)))?.innerText ? undefined : id;
+      } catch (e) {console.error(e)}}))).filter(e => e);
+    } else {
+      doc = $doc(await $ajax.fetch('?s=Bazaar&ss=am&screen=repair&filter=equipped'));
+      eqps = (await Promise.all(Array.from(gE('#equiplist>table>tbody>tr:not(.eqselall):not(.eqtplabel)', 'all', doc)).map(async eqp => { try {
+        const id = eqp.getAttribute('onmouseover').match(/hover_equip\((\d+)\)/)[1];
+        const condition = 1 * gE('td:last-child', eqp).childNodes[0].textContent.replace('%', '');
+        if (condition > g('option').repairValue) {
+          return;
+        }
+        // TODO repair
+        var iframe = cE('iframe');
+        iframe.style.cssText += "display:none"
+        iframe.src = `?s=Bazaar&ss=am&screen=repair&filter=equipped&eqids[]=${id}`;
+        document.body.appendChild(iframe);
+        await loadIframe(iframe);
+        if(gE('#equipsubmit', iframe.contentWindow.document.body).getAttribute('disabled')){
+          return id;
+        }
+        gE('#equipform', iframe.contentWindow.document.body).submit();
+      } catch (e) {console.error(e)}}))).filter(e => e);
+    }
     if (eqps.length) {
       console.log('eqps need repair: ', eqps);
       document.title = `[R!]` + document.title;
@@ -2390,6 +2660,15 @@ try {
     logSwitchAsyncTask(arguments);
     return !eqps.length;
   } catch (e) {console.error(e)}; return false; }
+
+  function loadIframe(iframe) {
+    return new Promise((resolve, reject) => {
+      // 监听iframe的load事件
+      iframe.onload = () => {
+        resolve("Iframe loaded successfully");
+      };
+    });
+  }
 
   function checkStamina(low, cost) {
     let stamina = getValue('stamina');
@@ -2422,6 +2701,10 @@ try {
   }
 
   async function updateEncounter(engage, isInBattle) { try {
+    if(!g('option').encounter && !g('option').encounterDisplay){
+      console.log("skip encounter check");
+      return;
+    }
     if(getValue('disabled')){
       await pauseAsync(_1s);
       return await updateEncounter(engage, isInBattle);
@@ -2514,12 +2797,26 @@ try {
       await Promise.all(arena.sites.map(async site => { try {
         const doc = $doc(await $ajax.fetch(site));
         if (site === '?s=Battle&ss=gr') {
-          arena.token.gr = gE('img[src*="startgrindfest.png"]', doc).getAttribute('onclick').match(/init_battle\(1, '(.*?)'\)/)[1];
+          const onclickInner = gE('img[src*="startgrindfest.png"]', doc).getAttribute('onclick').match(/init_battle\(1\)/);
+          if(onclickInner){
+            arena.token.gr = null;
+          }
           return;
         }
-        gE('img[src*="startchallenge.png"]', 'all', doc).forEach((_) => {
-          const temp = _.getAttribute('onclick').match(/init_battle\((\d+),\d+,'(.*?)'\)/);
-          arena.token[temp[1]] = temp[2];
+        gE('img[src*="startchallenge.png"]', 'all', doc).forEach((btn) => {
+          const onclick = btn.getAttribute('onclick');
+          var temp = onclick.match(/init_battle\((\d+),\d+,'(.*?)'\)/);
+          if(temp){
+            arena.token[temp[1]] = temp[2];
+            return;
+          }
+          temp = onclick.match(/init_battle\((\d+),\d+\)/);
+          if(temp){
+            arena.token[temp[1]] = null;
+            return;
+          }
+          temp = onclick.match(/init_battle\((\d+)\)/);
+          arena.token[temp[1]] = null;
         });
       } catch (e) {console.error(e)}}));
     }
@@ -2529,7 +2826,7 @@ try {
       arena.arrayDone = [];
     }
     if (!isToday || !arena.isOptionUpdated) {
-      arena.array = g('option').idleArenaValue.split(',') ?? [];
+      arena.array = g('option').idleArenaValue?.split(',') ?? [];
       arena.array.reverse();
     }
     return setValue('arena', arena);
@@ -2549,15 +2846,24 @@ try {
     if(staminaChecked === 1){ // succeed
         return true;
     }
-    if(staminaChecked === 0){ // failed until today ends
+    if(staminaChecked === 0){ // failed currently
       setTimeout(method, Math.floor(time(0) / _1h + 1) * _1h - time(0));
-      document.title = `[S!!]` + document.title;
-    } else { // case -1: // failed with nature recover
       document.title = `[S!]` + document.title;
+    } else { // case -1: // failed with nature recover
+      document.title = `[S!!]` + document.title;
     }
   }
 
   async function idleArena() { try { // 闲置竞技场
+    function writeArenaStart(){
+      document.title = _alert(-1, '闲置竞技场开始', '閒置競技場開始', 'Idle Arena start');
+      if (key !== 'gr'){
+        arena.arrayDone.push(key);
+      } else {
+        arena.gr--;
+      }
+      setValue('arena', arena);
+    }
     let arena = getValue('arena', true);
     console.log('arena:', getValue('arena', true));
     if (arena.array.length === 0) {
@@ -2611,7 +2917,7 @@ try {
 
     let href, cost;
     let token = arena.token[id];
-    const key = id;
+    let key = id;
     if (key === 'gr') {
       if (arena.gr <= 0) {
         setValue('arena', arena);
@@ -2619,7 +2925,6 @@ try {
         arena.arrayDone.push('gr');
         return;
       }
-      arena.gr--;
       href = 'gr';
       key = 1;
       cost = staminaCost.gr;
@@ -2631,16 +2936,44 @@ try {
       href = 'ar';
     }
     cost ??= staminaCost[key];
-    if (!checkBattleReady(idleArena, { staminaCost: cost, checkEncounter: true })) {
+    if (!checkBattleReady(idleArena, { staminaCost: cost, checkEncounter: true, staminaLow: href === 'gr' ? g('option').staminaGrindFest : undefined})) {
       logSwitchAsyncTask(arguments);
       return;
     }
-    document.title = _alert(-1, '闲置竞技场开始', '閒置競技場開始', 'Idle Arena start');
-    if(key !== 'gr'){
-      arena.arrayDone.push(key);
+    if(token){
+      writeArenaStart();
+      $ajax.open(`?s=Battle&ss=${href}`, `initid=${String(key)}&inittoken=${token}`);
+      logSwitchAsyncTask(arguments);
+      return;
     }
-    setValue('arena', arena);
-    $ajax.open(`?s=Battle&ss=${href}`, `initid=${String(key)}&inittoken=${token}`);
+    // new version in isekai
+    var iframe = cE('iframe');
+    iframe.src = `?s=Battle&ss=${href}`;
+    iframe.style.cssText += "display:none";
+    document.body.appendChild(iframe);
+    await loadIframe(iframe);
+    var btns = gE(`#arena_list>tbody>tr>td>img`, 'all', iframe.contentWindow.document.body);
+    for(let btn of btns){
+      const onclick = btn.getAttribute('onclick');
+      if(!onclick){
+        continue;
+      }
+      var temp = onclick.match(/init_battle\((\d+),\d+\)/) ?? onclick.match(/init_battle\((\d+)\)/);
+      if(!temp || temp[1]*1 !== key){
+        continue;
+      }
+      iframe.contentWindow.confirm = function(message) { // 自动点击进入
+        return true;
+      };
+      iframe.contentWindow.alert = function(message) {
+        return;
+      };
+      writeArenaStart();
+      btn.onclick();
+      await loadIframe(iframe);
+      goto();
+      return;
+    }
     logSwitchAsyncTask(arguments);
   } catch (e) {console.error(e)}}
 
@@ -2767,7 +3100,7 @@ try {
       }
       const type = battle.roundType;
       let subtype, title;
-      const monsterNames = Array.from(gE('div.btm3>div>div', 'all')).map(monster => monster.innerHTML);
+      const monsterNames = Array.from(gE(`${monsterStateKeys.name}>div>div`, 'all')).map(monster => monster.innerHTML);
       const lang = g('lang') * 1;
       const info = battleInfoList[type];
       switch (type) {
@@ -2854,22 +3187,17 @@ try {
     const names = g('option').battleOrderName?.split(',') ?? [];
     for (let i = 0; i < names.length; i++) {
       if(taskList[names[i]]()){
+        onStepInDone();
         return;
       }
       delete taskList[names[i]];
     }
     for (let name in taskList) {
       if (taskList[name]()) {
+        onStepInDone();
         return;
       }
     }
-  }
-
-  function getMonsterID(s) {
-    if (s.order !== undefined) {
-      return (s.order + 1) % 10;
-    } // case is monsterStatus
-    return (s + 1) % 10; // case is order
   }
 
   /**
@@ -2879,9 +3207,9 @@ try {
        * @param {(target) => bool} excludeCondition target with id
        * @returns
        */
-  function getRangeCenterID(target, range = undefined, isWeaponAttack = false, excludeCondition = undefined) {
+  function getRangeCenter(target, range = undefined, isWeaponAttack = false, excludeCondition = undefined, forceUseIndex = undefined) {
     if (!range) {
-      return getMonsterID(target);
+      return { id: getMonsterID(target), rank: Number.MAX_SAFE_INTEGER };
     }
     const centralExtraWeight = -1 * Math.log10(1 + (isWeaponAttack ? (g('option').centralExtraRatio / 100) ?? 0 : 0));
     let order = target.order;
@@ -2890,7 +3218,7 @@ try {
     let msTemp = JSON.parse(JSON.stringify(g('battle').monsterStatus));
     msTemp.sort(objArrSort('order'));
     let unreachableWeight = g('option').unreachableWeight;
-    let minRank;
+    let minRank = Number.MAX_SAFE_INTEGER;
     for (let i = order - range; i <= order + range; i++) {
       if (i < 0 || i >= msTemp.length || msTemp[i].isDead) {
         continue; // 无法选中
@@ -2905,13 +3233,17 @@ try {
           rank += unreachableWeight - cew;
           continue;
         }
-        rank += mon.finWeight + cew; // 中心目标会受到副手及冲击攻击时，相当于有效生命值降低
+        // 中心目标会受到副手及冲击攻击时，相当于有效生命值降低
+        rank += cew;
+        // 强制使用顺序而非权重时，全部使用统一的权重而非怪物状态
+        rank += forceUseIndex ? -1 : mon.finWeight;
       }
       if (rank < minRank) {
         newOrder = i;
+        minRank = rank;
       }
     }
-    return getMonsterID(newOrder);
+    return { id: getMonsterID(newOrder), rank: minRank};
   }
 
   function autoPause() {
@@ -2949,6 +3281,22 @@ try {
     }
   }
 
+  function stepIn() {
+    setValue('stepIn', true);
+    if (getValue('disabled')) {
+      g('timeNow', time(0));
+      pauseChange();
+    }
+  }
+
+  function onStepInDone(){
+    if(!getValue('stepIn')){
+      return;
+    }
+    delValue('stepIn');
+    pauseChange();
+  }
+
   function SetExitBattleTimeout(alarm){
     setAlarm(alarm);
     if(alarm === 'SkipDefeated') return;
@@ -2963,22 +3311,30 @@ try {
   }
 
   function reloader() {
-    let obj; let a; let cost;
     const battleUnresponsive = {
-      'Alert': { Method: setAlarm },
-      'Reload': { Method: goto },
-      'Alt': { Method: gotoAlt }
+      'Alert': { method: setAlarm },
+      'Reload': { method: goto },
+      'Alt': { method: gotoAlt }
     }
     function clearBattleUnresponsive(){
-      Object.keys(battleUnresponsive).forEach(t=>clearTimeout(battleUnresponsive[t].Timeout));
+      Object.keys(battleUnresponsive).forEach(t=>clearTimeout(battleUnresponsive[t].timeout));
     }
+    async function onBattleUnresponsive(method) {
+      if(getValue('disabled')){
+        await pauseAsync(_1s);
+        return await onBattleUnresponsive();
+      }
+      method();
+    }
+
+    let obj; let a; let cost;
     const eventStart = cE('a');
     eventStart.id = 'eventStart';
     eventStart.onclick = function () {
       a = unsafeWindow.info;
       for(let t in g('option').battleUnresponsive) {
         if (g('option').battleUnresponsive[t]) {
-          battleUnresponsive[t].Timeout = setTimeout(battleUnresponsive[t].Method, Math.max(1, g('option').battleUnresponsiveTime[t]) * _1s);
+          battleUnresponsive[t].timeout = setTimeout(()=>onBattleUnresponsive(battleUnresponsive[t].method), Math.max(1, g('option').battleUnresponsiveTime[t]) * _1s);
         }
       }
       if (g('option').recordUsage) {
@@ -2996,6 +3352,7 @@ try {
       }
     };
     gE('body').appendChild(eventStart);
+
     const eventEnd = cE('a');
     eventEnd.id = 'eventEnd';
     eventEnd.onclick = function () {
@@ -3004,7 +3361,7 @@ try {
       g('timeNow', timeNow);
       const monsterDead = gE('img[src*="nbardead"]', 'all').length;
       g('monsterAlive', g('monsterAll') - monsterDead);
-      const bossDead = gE('div.btm1[style*="opacity"] div.btm2[style*="background"]', 'all').length;
+      const bossDead = gE(`${monsterStateKeys.obj}[style*="opacity"] ${monsterStateKeys.lv}[style*="background"]`, 'all').length;
       g('bossAlive', g('bossAll') - bossDead);
       const battleLog = gE('#textlog>tbody>tr>td', 'all');
       if (g('option').recordUsage) {
@@ -3022,48 +3379,61 @@ try {
       if (g('option').recordUsage) {
         recordUsage2();
       }
-      if (g('battle').roundNow !== g('battle').roundAll) { // Next Round
-        if(g('option').NewRoundWaitTime){
-          setTimeout(onNewRound, g('option').NewRoundWaitTime * _1s);
-        } else {
-          onNewRound();
+      onRoundEnd();
+      async function onRoundEnd() {
+        if(getValue('disabled')){
+          await pauseAsync(_1s);
+          return await onRoundEnd();
         }
-        return;
+        if (g('battle').roundNow === g('battle').roundAll) { // Next Round
+          if (g('monsterAlive') > 0) { // Defeat
+            SetExitBattleTimeout(g('option').autoSkipDefeated ? 'SkipDefeated' : 'Defeat');
+          }
+          if (g('battle').roundNow === g('battle').roundAll) { // Victory
+            SetExitBattleTimeout('Victory');
+          }
+        } else {
+          if(g('option').NewRoundWaitTime){
+            setTimeout(onNewRound, g('option').NewRoundWaitTime * _1s);
+          } else {
+            onNewRound();
+          }
+        }
+        clearBattleUnresponsive();
 
-        async function onNewRound(){
-          try {
-            const html = await $ajax.fetch(window.location.href);
-
-            gE('#pane_completion').removeChild(gE('#btcp'));
-            clearBattleUnresponsive();
-            const doc = $doc(html)
-            if (gE('#riddlecounter', doc)) {
-              if (g('option').riddlePopup && !window.opener) {
-                window.open(window.location.href, 'riddleWindow', 'resizable,scrollbars,width=1241,height=707');
-                return;
-              }
-              goto();
+        async function onNewRound(){ try {
+          if(getValue('disabled')){
+            await pauseAsync(_1s);
+            return await onNewRound();
+          }
+          if(gE('#btcp')?.innerHTML.includes("finishbattle.png")){
+            goto();
+            return;
+          }
+          const html = await $ajax.fetch(window.location.href);
+          gE('#pane_completion').removeChild(gE('#btcp'));
+          clearBattleUnresponsive();
+          const doc = $doc(html)
+          if (gE('#riddlecounter', doc)) {
+            if (g('option').riddlePopup && !window.opener) {
+              window.open(window.location.href, 'riddleWindow', 'resizable,scrollbars,width=1241,height=707');
               return;
             }
-            ['#battle_right', '#battle_left'].forEach(selector=>{ gE('#battle_main').replaceChild(gE(selector, doc), gE(selector)); })
-            unsafeWindow.battle = new unsafeWindow.Battle();
-            unsafeWindow.battle.clear_infopane();
-            Debug.log('______________newRound', true);
-            newRound(true);
-            onBattle();
-          } catch(e) { e=>console.error(e) }
-        }
+            goto();
+            return;
+          }
+          ['#battle_right', '#battle_left'].forEach(selector=>{ gE('#battle_main').replaceChild(gE(selector, doc), gE(selector)); })
+          unsafeWindow.battle = new unsafeWindow.Battle();
+          unsafeWindow.battle.clear_infopane();
+          Debug.log('______________newRound', true);
+          newRound(true);
+          onStepInDone();
+          onBattle();
+        } catch(e) { e=>console.error(e) }}
       }
-
-      if (g('monsterAlive') > 0) { // Defeat
-        SetExitBattleTimeout(g('option').autoSkipDefeated ? 'SkipDefeated' : 'Defeat');
-      }
-      if (g('battle').roundNow === g('battle').roundAll) { // Victory
-        SetExitBattleTimeout('Victory');
-      }
-      clearBattleUnresponsive();
     };
     gE('body').appendChild(eventEnd);
+
     window.sessionStorage.delay = g('option').delay;
     window.sessionStorage.delay2 = g('option').delay2;
     const fakeApiCall = cE('script');
@@ -3128,11 +3498,11 @@ try {
     if (window.location.hash !== '') {
       goto();
     }
-    g('monsterAll', gE('div.btm1', 'all').length);
+    g('monsterAll', gE(monsterStateKeys.obj, 'all').length);
     const monsterDead = gE('img[src*="nbardead"]', 'all').length;
     g('monsterAlive', g('monsterAll') - monsterDead);
-    g('bossAll', gE('div.btm2[style^="background"]', 'all').length);
-    const bossDead = gE('div.btm1[style*="opacity"] div.btm2[style*="background"]', 'all').length;
+    g('bossAll', gE(`${monsterStateKeys.lv}[style^="background"]`, 'all').length);
+    const bossDead = gE(`${monsterStateKeys.obj}[style*="opacity"] ${monsterStateKeys.lv}[style*="background"]`, 'all').length;
     g('bossAlive', g('bossAll') - bossDead);
     const battleLog = gE('#textlog>tbody>tr>td', 'all');
     if (!battle.roundType) {
@@ -3195,8 +3565,8 @@ try {
     if (battleLog[battleLog.length - 1].textContent.match('Initializing')) {
       const monsterStatus = [];
       let order = 0;
-      const monsterNames = Array.from(gE('div.btm3>div>div', 'all')).map(monster => monster.innerText);
-      const monsterLvs = Array.from(gE('div.btm2>div>div', 'all')).map(monster => monster.innerText);
+      const monsterNames = Array.from(gE(`${monsterStateKeys.name}>div>div`, 'all')).map(monster => monster.innerText);
+      const monsterLvs = Array.from(gE(`${monsterStateKeys.lv}>div>div`, 'all')).map(monster => monster.innerText);
       const monsterDB = getValue('monsterDB', true) ?? {};
       const monsterMID = getValue('monsterMID', true) ?? {};
       const oldDB = JSON.stringify(monsterDB);
@@ -3246,7 +3616,7 @@ try {
         battle.roundNow = 1;
         battle.roundAll = 1;
       }
-    } else if (!battle.monsterStatus || battle.monsterStatus.length !== gE('div.btm2', 'all').length) {
+    } else if (!battle.monsterStatus || battle.monsterStatus.length !== gE(monsterStateKeys.lv, 'all').length) {
       battle.roundNow = 1;
       battle.roundAll = 1;
     }
@@ -3283,7 +3653,9 @@ try {
 
   function countMonsterHP() { // 统计敌人血量
     let i, j;
-    const monsterHp = gE('div.btm4>div.btm5:nth-child(1)', 'all');
+    const monsterHp = gE(`${monsterStateKeys.bars}:nth-child(1)`, 'all');
+    const monsterMp = gE(`${monsterStateKeys.bars}:nth-child(2)`, 'all');
+    const monsterSp = gE(`${monsterStateKeys.bars}:nth-child(3)`, 'all');
     let battle = getValue('battle', true);
     const monsterStatus = battle.monsterStatus;
     const hpArray = [];
@@ -3293,7 +3665,9 @@ try {
         monsterStatus[i].hpNow = Infinity;
       } else {
         monsterStatus[i].isDead = false;
-        monsterStatus[i].hpNow = Math.floor(monsterStatus[i].hp * parseFloat(gE('img', monsterHp[i]).style.width) / 120 + 1);
+        monsterStatus[i].hpNow = Math.floor(monsterStatus[i].hp * parseFloat(gE('img:first-child', monsterHp[i]).style.width) / 120 + 1);
+        monsterStatus[i].mpNow = parseFloat(gE('img:first-child', monsterMp[i]).style.width) / 120;
+        monsterStatus[i].spNow = parseFloat(gE('img:first-child', monsterSp[i]).style.width) / 120;
         hpArray.push(monsterStatus[i].hpNow);
       }
     }
@@ -3353,7 +3727,7 @@ try {
         img: 'wpn_bleed',
       },
     };
-    const monsterBuff = gE('div.btm6', 'all');
+    const monsterBuff = gE(monsterStateKeys.buffs, 'all');
     const hpMin = Math.min.apply(null, hpArray);
     const yggdrasilExtraWeight = g('option').YggdrasilExtraWeight;
     const unreachableWeight = g('option').unreachableWeight;
@@ -3366,7 +3740,8 @@ try {
       }
       let weight = baseHpRatio * Math.log10(monsterStatus[i].hpNow / hpMin); // > 0 生命越低权重越低优先级越高
       monsterStatus[i].hpWeight = weight;
-      if (yggdrasilExtraWeight && ('Yggdrasil' === gE('div.btm3>div>div', monsterBuff[i].parentNode).innerText || '世界树 Yggdrasil' === gE('div.btm3>div>div', monsterBuff[i].parentNode).innerText)) { // 默认设置下，任何情况都优先击杀群体大量回血的boss"Yggdrasil"
+      const name = gE(`${monsterStateKeys.name}>div>div`, monsterBuff[i].parentNode).innerText;
+      if (yggdrasilExtraWeight && ('Yggdrasil' === name || '世界树 Yggdrasil' === name)) { // 默认设置下，任何情况都优先击杀群体大量回血的boss"Yggdrasil"
         weight += yggdrasilExtraWeight; // yggdrasilExtraWeight.defalut -1000
       }
       for (j in skillLib) {
@@ -3391,8 +3766,9 @@ try {
     const name = g('option').itemOrderName.split(',');
     const order = g('option').itemOrderValue.split(',');
     for (let i = 0; i < name.length; i++) {
-      if (g('option').item[name[i]] && checkCondition(g('option')[`item${name[i]}Condition`]) && isOn(order[i])) {
-        isOn(order[i]).click();
+      let id = order[i];
+      if (g('option').item[name[i]] && checkCondition(g('option')[`item${name[i]}Condition`]) && isOn(id)) {
+        (gE(`.bti3>div[onmouseover*="(${id})"]`) ?? gE(id)).click();
         return true;
       }
     }
@@ -3406,13 +3782,13 @@ try {
     if (!g('option').scroll) {
       return false;
     }
-    if (!checkCondition(g('option').scrollCondition)) {
-      return false;
-    }
     if (!g('option').scrollRoundType) {
       return false;
     }
     if (!g('option').scrollRoundType[g('battle').roundType]) {
+      return false;
+    }
+    if (!checkCondition(g('option').scrollCondition)) {
       return false;
     }
     const scrollLib = {
@@ -3463,20 +3839,22 @@ try {
       },
     };
     const scrollFirst = (g('option').scrollFirst) ? '_scroll' : '';
-    let isUsed;
     for (const i in scrollLib) {
-      if (g('option').scroll[i] && gE(`.bti3>div[onmouseover*="${scrollLib[i].id}"]`) && checkCondition(g('option')[`scroll${i}Condition`])) {
-        for (let j = 1; j <= scrollLib[i].mult; j++) {
-          if (gE(`#pane_effects>img[src*="${scrollLib[i][`img${j}`]}${scrollFirst}"]`)) {
-            isUsed = true;
-            break;
-          }
-          isUsed = false;
+      if (!g('option').scroll[i]) {
+        continue;
+      }
+      if(!gE(`.bti3>div[onmouseover*="(${scrollLib[i].id})"]`)){
+        continue;
+      }
+      if(!checkCondition(g('option')[`scroll${i}Condition`])){
+        continue;
+      }
+      for (let j = 1; j <= scrollLib[i].mult; j++) {
+        if (getPlayerBuff(scrollLib[i][`img${j}`]+scrollFirst)) {
+          continue;
         }
-        if (!isUsed) {
-          gE(`.bti3>div[onmouseover*="${scrollLib[i].id}"]`).click();
-          return true;
-        }
+        gE(`.bti3>div[onmouseover*="(${scrollLib[i].id})"]`).click();
+        return true;
       }
     }
     return false;
@@ -3489,7 +3867,7 @@ try {
     if (!g('option').channelSkill) {
       return false;
     }
-    if (!gE('#pane_effects>img[src*="channeling"]')) {
+    if (!getPlayerBuff('channeling')) {
       return false;
     }
     const skillLib = {
@@ -3545,7 +3923,7 @@ try {
     if (g('option').channelSkill) {
       for (i = 0; i < skillPack.length; i++) {
         j = skillPack[i];
-        if (g('option').channelSkill[j] && !gE(`#pane_effects>img[src*="${skillLib[j].img}"]`) && isOn(skillLib[j].id)) {
+        if (g('option').channelSkill[j] && !getPlayerBuff(skillLib[j].img) && isOn(skillLib[j].id)) {
           gE(skillLib[j].id).click();
           return true;
         }
@@ -3574,11 +3952,11 @@ try {
       };
       for (i = 0; i < buff.length; i++) {
         const spellName = buff[i].getAttribute('onmouseover').match(/'(.*?)'/)[1];
-        const buffLastTime = buff[i].getAttribute('onmouseover').match(/\(.*,.*, (.*?)\)$/)[1] * 1;
+        const buffLastTime = getBuffTurnFromImg(buff[i]);
         if (isNaN(buffLastTime) || buff[i].src.match(/_scroll.png$/)) {
           continue;
         } else {
-          if (spellName === 'Cloak of the Fallen' && !gE('#pane_effects>img[src*="sparklife"]') && isOn('422')) {
+          if (spellName === 'Cloak of the Fallen' && !getPlayerBuff('sparklife') && isOn('422')) {
             gE('422').click();
             return true;
           } if (spellName in name2Skill && isOn(skillLib[name2Skill[spellName]].id)) {
@@ -3652,7 +4030,7 @@ try {
     const skillPack = g('option').buffSkillOrderValue.split(',');
     for (i = 0; i < skillPack.length; i++) {
       let buff = skillPack[i];
-      if (g('option').buffSkill[buff] && checkCondition(g('option')[`buffSkill${buff}Condition`]) && !gE(`#pane_effects>img[src*="${skillLib[buff].img}"]`) && isOn(skillLib[buff].id)) {
+      if (g('option').buffSkill[buff] && checkCondition(g('option')[`buffSkill${buff}Condition`]) && !getPlayerBuff(skillLib[buff].img) && isOn(skillLib[buff].id)) {
         gE(skillLib[buff].id).click();
         return true;
       }
@@ -3680,8 +4058,8 @@ try {
       },
     };
     for (i in draughtPack) {
-      if (!gE(`#pane_effects>img[src*="${draughtPack[i].img}"]`) && g('option').buffSkill && g('option').buffSkill[i] && checkCondition(g('option')[`buffSkill${i}Condition`]) && gE(`.bti3>div[onmouseover*="${draughtPack[i].id}"]`)) {
-        gE(`.bti3>div[onmouseover*="${draughtPack[i].id}"]`).click();
+      if (!getPlayerBuff(draughtPack[i].img) && g('option').buffSkill && g('option').buffSkill[i] && checkCondition(g('option')[`buffSkill${i}Condition`]) && gE(`.bti3>div[onmouseover*="(${draughtPack[i].id})"]`)) {
+        gE(`.bti3>div[onmouseover*="(${draughtPack[i].id})"]`).click();
         return true;
       }
     }
@@ -3718,8 +4096,8 @@ try {
       id: 12601,
       img: 'darkinfusion',
     }];
-    if (gE(`.bti3>div[onmouseover*="${infusionLib[g('attackStatus')].id}"]`) && !gE(`#pane_effects>img[src*="${infusionLib[[g('attackStatus')]].img}"]`)) {
-      gE(`.bti3>div[onmouseover*="${infusionLib[g('attackStatus')].id}"]`).click();
+    if (gE(`.bti3>div[onmouseover*="(${infusionLib[g('attackStatus')].id})"]`) && !getPlayerBuff(infusionLib[[g('attackStatus')]].img)) {
+      gE(`.bti3>div[onmouseover*="(${infusionLib[g('attackStatus')].id})"]`).click();
       return true;
     }
     return false;
@@ -3734,6 +4112,11 @@ try {
   }
 
   function autoSS() {
+    const textSP = gE('#vrs') ?? gE('#dvrs');
+    const spValue = textSP.childNodes[0].textContent * 1;
+    if (spValue <= 1){
+      return false;
+    }
     if ((g('option').turnOnSS && checkCondition(g('option').turnOnSSCondition) && !gE('#ckey_spirit[src*="spirit_a"]')) || (g('option').turnOffSS && checkCondition(g('option').turnOffSSCondition) && gE('#ckey_spirit[src*="spirit_a"]'))) {
       gE('#ckey_spirit').click();
       return true;
@@ -3755,67 +4138,53 @@ try {
     }
 
     const skillOrder = (g('option').skillOrderValue || 'OFC,FRD,T3,T2,T1').split(',');
+    const fightStyle = g('fightingStyle');
     const skillLib = {
-      OFC: {
-        id: '1111',
-        oc: 8,
-      },
-      FRD: {
-        id: '1101',
-        oc: 4,
-      },
-      T3: {
-        id: `2${g('option').fightingStyle}03`,
-        oc: 2,
-      },
-      T2: {
-        id: `2${g('option').fightingStyle}02`,
-        oc: 2,
-      },
-      T1: {
-        id: `2${g('option').fightingStyle}01`,
-        oc: 2,
-      },
+      OFC: '1111',
+      FRD: '1101',
+      T3: fightStyle ? `2${fightStyle}03` : undefined,
+      T2: fightStyle ? `2${fightStyle}02` : undefined,
+      T1: fightStyle ? `2${fightStyle}01` : undefined,
     };
+    const skillOC = { // default as 2
+      '1101': 4,
+      '1111': 8,
+      '2101': 4,
+      '2201': 1,
+      '2203': 4,
+      '2403': 3
+    }
     const rangeSkills = {
       2101: 2,
       2403: 2,
       1111: 4,
     }
-    const monsterStatus = g('battle').monsterStatus;
     for (let i in skillOrder) {
       let skill = skillOrder[i];
-      let range = 0;
-      if (!checkCondition(g('option')[`skill${skill}Condition`])) {
+      if(!skill || !g('option').skill[skill]){
+        return;
+      }
+      let id = skillLib[skill];
+      if (!isOn(id)) {
         continue;
       }
-      if (!isOn(skillLib[skill].id)) {
-        continue;
-      }
-      if (g('oc') < skillLib[skill].oc) {
+      if (g('oc') < (id in skillOC ? skillOC[id] : 2)) {
         continue;
       }
       if (g('option').skillOTOS && g('option').skillOTOS[skill] && g('skillOTOS')[skill] >= 1) {
         continue;
       }
       g('skillOTOS')[skill]++;
-      gE(skillLib[skill].id).click();
-      if (skillLib[skill].id in rangeSkills) {
-        range = rangeSkills[skillLib[skill].id];
-      }
-      if (!g('option').mercifulBlow || g('option').fightingStyle !== '2' || skill !== 'T3') {
+      let target = checkCondition(g('option')[`skill${skill}Condition`], g('battle').monsterStatus);
+      if(!target){
         continue;
       }
-      // Merciful Blow
-      for (let j = 0; j < monsterStatus.length; j++) {
-        if (monsterStatus[j].hpNow / monsterStatus[j].hp < 0.25 && gE(`#mkey_${getMonsterID(monsterStatus[j])} img[src*="wpn_bleed"]`)) {
-          gE(`#mkey_${getRangeCenterID(monsterStatus[j])}`).click();
-          return true;
-        }
-      }
+      gE(id).click();
+      const range = id in rangeSkills ? rangeSkills[id] : 0;
+      getMonster(getRangeCenter(target, range).id).click();
+      return true;
     }
-    gE(`#mkey_${getRangeCenterID(monsterStatus[0])}`).click();
-    return true;
+    return false;
   }
 
   function useDeSkill() { // 自动施法DEBUFF技能
@@ -3826,28 +4195,26 @@ try {
     let skillPack = ['We', 'Im'];
     for (let i = 0; i < skillPack.length; i++) {
       if (g('option')[`debuffSkill${skillPack[i]}All`]) { // 是否启用
-        continue;
-      }
-      if (!checkCondition(g('option')[`debuffSkill${skillPack[i]}AllCondition`])) { // 检查条件
-        continue;
+        if (checkCondition(g('option')[`debuffSkill${skillPack[i]}AllCondition`], g('battle').monsterStatus)) { // 检查条件
+          continue;
+        }
       }
       skillPack.splice(i, 1);
       i--;
     }
-    skillPack.sort((x, y) => g('option').debuffSkillOrderValue.indexOf(x) - g('option').debuffSkillOrderValue.indexOf(y))
+    skillPack.sort((x, y) => g('option').debuffSkillOrderValue.indexOf(x) - g('option').debuffSkillOrderValue.indexOf(y));
     let toAllCount = skillPack.length;
     if (g('option').debuffSkill) { // 是否有启用的buff(不算两个特殊的)
       skillPack = skillPack.concat(g('option').debuffSkillOrderValue.split(','));
     }
     for (let i in skillPack) {
       let buff = skillPack[i];
-      if (i >= toAllCount && !skillPack[i]) { // 检查buff是否启用
-        continue;
+      if (i >= toAllCount) { // 非先全体
+        if (!buff || !checkCondition(g('option')[`debuffSkill${buff}Condition`], g('battle').monsterStatus)) { // 检查条件
+          continue;
+        }
       }
-      if (!checkCondition(g('option')[`debuffSkill${buff}Condition`])) { // 检查条件
-        continue;
-      }
-      let succeed = useDebuffSkill(skillPack[i], i < toAllCount);
+      let succeed = useDebuffSkill(buff, i < toAllCount);
       // 前 toAllCount 个都是先给全体上的
       if (succeed) {
         return true;
@@ -3906,47 +4273,62 @@ try {
         img: 'confuse',
       },
     };
-
     if (!isOn(skillLib[buff].id)) { // 技能不可用
       return false;
     }
-    const monsterStatus = g('battle').monsterStatus;
-    let isDebuffed = (target) => gE(`img[src*="${skillLib[buff].img}"]`, gE(`#mkey_${getMonsterID(target)}>.btm6`));
-    let primaryTarget;
-    let max = isAll ? monsterStatus.length : 1;
-    for (let i = 0; i < max; i++) {
-      let target = buff === 'Dr' ? monsterStatus[max - i - 1] : monsterStatus[i];
-      if (monsterStatus[i].isDead) {
-        continue;
-      }
-      if (isDebuffed(target)) { // 检查是否已有该buff
-        continue;
-      }
-      primaryTarget = target;
-      break;
-    }
-    if (primaryTarget === undefined) {
-      return false;
-    }
-
+    // 获取范围
     let range = 0;
     let ab;
+    const ability = getValue('ability', true);
     for (ab in skillLib[buff].range) {
-      const ranges = skillLib[buff].range[ab][skillLib[buff].skill * 1];
+      const ranges = skillLib[buff].range[ab];
       if (!ranges) {
         continue;
       }
-      range = ranges[getValue('ability', true)[ab].level];
+      if(ability){
+        range = ranges[ability[ab].level];
+      }
       break;
     }
-    let id = getRangeCenterID(primaryTarget, range, isDebuffed);
-    const imgs = gE('img', 'all', gE(`#mkey_${id}>.btm6`));
+
+    // 获取目标
+    let isDebuffed = (target) => getMonsterBuff(getMonsterID(target), skillLib[buff].img);
+    let debuffByIndex = isAll && g('option')[`debuffSkill${buff}AllByIndex`];
+    let monsterStatus = g('battle').monsterStatus;
+    if (debuffByIndex){
+      monsterStatus = JSON.parse(JSON.stringify(monsterStatus));
+      monsterStatus.sort(objArrSort('order'));
+    }
+    let max = isAll ? monsterStatus.length : 1;
+
+    let id;
+    let minRank = Number.MAX_SAFE_INTEGER;
+    for (let i = 0; i < max; i++) {
+      let target = buff === 'Dr' ? monsterStatus[max - i - 1] : monsterStatus[i];
+      target = checkCondition(g('option')[`debuffSkill${buff}${isAll ? 'all' : ''}Condition`], [target]);
+      if (!target || target.isDead || isDebuffed(target)) {
+        continue;
+      }
+      const center = getRangeCenter(target, range, false, isDebuffed, debuffByIndex);
+      if(!id || center.rank < minRank){
+        minRank = center.rank;
+        id = center.id;
+        if(!isAll){
+          // 只有覆盖全体才需要遍历全部
+          break;
+        }
+      }
+    }
+    if (id === undefined) {
+      return false;
+    }
+    const imgs = gE('img', 'all', gE(monsterStateKeys.buffs, getMonster(id)));
     // 已有buff小于6个
     // 未开启debuff失败警告
     // buff剩余持续时间大于等于警报时间
-    if (imgs.length < 6 || !g('option').debuffSkillTurnAlert || (g('option').debuffSkillTurn && imgs[imgs.length - 1].getAttribute('onmouseover').match(/\(.*,.*, (.*?)\)$/)[1] * 1 >= g('option').debuffSkillTurn[buff])) {
+    if (imgs.length < 6 || !g('option').debuffSkillTurnAlert || (g('option').debuffSkillTurn && getBuffTurnFromImg(imgs[imgs.length - 1]) >= g('option').debuffSkillTurn[buff])) {
       gE(skillLib[buff].id).click();
-      gE(`#mkey_${id}`).click();
+      getMonster(id).click();
       return true;
     }
 
@@ -3994,25 +4376,26 @@ try {
       4502: { 152: [0, 2, 3] },
       4503: { 153: [0, 3, 4, 4] },
     }
-
     let range = 0;
     // Spell > Offensive Magic
     const attackStatus = g('attackStatus');
-    const monsterStatus = g('battle').monsterStatus;
+    let target = g('battle').monsterStatus[0];
     if (attackStatus === 0) {
-      if (g('option').fightingStyle === '1') { // 二天一流
+      if (g('fightingStyle') === '1') { // 二天一流
         range = 1;
       }
     } else {
-      if (g('option').etherTap && gE(`#mkey_${getMonsterID(monsterStatus[0])}>div.btm6>img[src*="coalescemana"]`) && (!gE('#pane_effects>img[onmouseover*="Ether Tap (x2)"]') || gE('#pane_effects>img[src*="wpn_et"][id*="effect_expire"]')) && checkCondition(g('option').etherTapCondition)) {
+      if (g('option').etherTap && getMonsterBuff(getMonsterID(target), 'coalescemana') && (!gE('#pane_effects>img[onmouseover*="Ether Tap (x2)"]') || getPlayerBuff(`wpn_et"][id*="effect_expire`)) && checkCondition(g('option').etherTapCondition)) {
         `pass`
-      }
-      else {
+      } else {
         const skill = 1 * (() => {
           let lv = 3;
           for (let condition of [g('option').highSkillCondition, g('option').middleSkillCondition, undefined]) {
             let id = `1${attackStatus}${lv--}`;
-            if (checkCondition(condition) && isOn(id)) return id;
+            target = checkCondition(condition, g('battle').monsterStatus);
+            if (target && isOn(id)){
+              return id;
+            }
           }
         })();
         gE(skill)?.click();
@@ -4021,12 +4404,18 @@ try {
           if (!ranges) {
             continue;
           }
-          range = ranges[getValue('ability', true)[ab]?.level ?? 0];
+          const ability = getValue('ability', true);
+          if(ability){
+            range = ranges[ability[ab].level];
+          }
           break;
         }
       }
     }
-    gE(`#mkey_${getRangeCenterID(monsterStatus[0], range, !attackStatus)}`).click();
+    if(!target || target.isDead){
+      return false;
+    }
+    getMonster(getRangeCenter(target, range, !attackStatus).id).click();
     return true;
   }
 
@@ -4039,10 +4428,10 @@ try {
   function fixMonsterStatus() { // 修复monsterStatus
     // document.title = _alert(-1, 'monsterStatus错误，正在尝试修复', 'monsterStatus錯誤，正在嘗試修復', 'monsterStatus Error, trying to fix');
     const monsterStatus = [];
-    const monsterNames = Array.from(gE('div.btm3>div>div', 'all')).map(monster => monster.innerText);
-    const monsterLvs = Array.from(gE('div.btm2>div>div', 'all')).map(monster => monster.innerText);
+    const monsterNames = Array.from(gE(`${monsterStateKeys.name}>div>div`, 'all')).map(monster => monster.innerText);
+    const monsterLvs = Array.from(gE(`${monsterStateKeys.lv}>div>div`, 'all')).map(monster => monster.innerText);
     const monsterDB = getValue('monsterDB', true);
-    gE('div.btm2', 'all').forEach((monster, order) => {
+    gE(monsterStateKeys.lv, 'all').forEach((monster, order) => {
       monsterStatus.push({
         order: order,
         hp: getHPFromMonsterDB(monsterDB, monsterNames[order], monsterLvs[order]) ?? ((monster.style.background === '') ? 1000 : 100000),
@@ -4078,7 +4467,7 @@ try {
     status.forEach(s => {
       const rank = weights.indexOf(s.finWeight);
       const id = getMonsterID(s);
-      if (!gE(`#mkey_${id}`) || !gE(`#mkey_${id}>.btm3`)) {
+      if (!getMonster(id) || !gE(monsterStateKeys.name, getMonster(id))) {
         return;
       }
       if (g('option').displayWeightBackground) {
@@ -4096,12 +4485,12 @@ try {
           }
           catch {
           }
-          gE(`#mkey_${id}`).style.cssText += `background: ${colorText};`;
+          getMonster(id).style.cssText += `background: ${colorText};`;
         }
       }
-      gE(`#mkey_${id}>.btm3`).style.cssText += 'display: flex; flex-direction: row;'
+      gE(monsterStateKeys.name, getMonster(id)).style.cssText += 'display: flex; flex-direction: row;'
       if (g('option').displayWeight) {
-        gE(`#mkey_${id}>.btm3`).innerHTML += `<div style='font-weight: bolder; right:0px; position: absolute;'>[${rank}|-${-rank + weights.length - 1}|${s.finWeight.toPrecision(s.finWeight >= 1 ? 5 : 4)}]</div>`;
+        gE(monsterStateKeys.name, getMonster(id)).innerHTML += `<div style='font-weight: bolder; right:0px; position: absolute;'>[${rank}|-${-rank + weights.length - 1}|${s.finWeight.toPrecision(s.finWeight >= 1 ? 5 : 4)}]</div>`;
       }
     });
   }
@@ -4111,7 +4500,7 @@ try {
     const barMP = gE('#vbm') ?? gE('#dvbm');
     const barSP = gE('#vbs') ?? gE('#dvbs');
     const barOC = gE('#dvbc');
-    const textHP = gE('#vrhd') ?? gE('#dvrhd');
+    const textHP = gE('#vrhd') ?? gE('#dvrhd') ?? gE('#dvrhb');
     const textMP = gE('#vrm') ?? gE('#dvrm');
     const textSP = gE('#vrs') ?? gE('#dvrs');
     const textOC = gE('#dvrc');
@@ -4121,18 +4510,25 @@ try {
       const value = text.innerHTML * 1;
       const percentage = value ? percentages[i] : 0;
       const inner = `[${percentage.toString()}%]`;
+      text.style.cssText += textOC ? `
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: 120px;
+      `: "";
       const percentageDiv = gE('div', text);
-      if (percentageDiv) {
-        percentageDiv.innerHTML = inner;
-        return;
-      }
-      text.innerHTML += `<div style="
+      const style = `
         position: relative;
-        top: ${textOC ? -15 : text === textHP ? -16.67 : -16}px;
-        right: ${textOC ? -70 : text === textMP ? -60 : text === textSP ? 40 : -100}px;
+        top: ${textOC ? 0 : text === textHP ? -16.67 : -16}px;
+        right: ${textOC ? -10 : text === textMP ? -60 : text === textSP ? 40 : -100}px;
         filter: brightness(0.2);
         text-align: left;
-        ">${inner}</div>`
+      `
+      if (percentageDiv) {
+        percentageDiv.innerHTML = inner;
+        percentageDiv.style.cssText = style;
+        return;
+      }
+      text.innerHTML += `<div style="${style}">${inner}</div>`
     });
   }
 
@@ -4261,8 +4657,7 @@ try {
       if (debug) {
         console.log(text);
       }
-      if (text.match(/you for \d+ \w+ damage/)) {
-        reg = text.match(/you for (\d+) (\w+) damage/);
+      if (reg = matchDamageInfoFromLogText(text)) {
         magic = reg[2].replace('ing', '');
         point = reg[1] * 1;
         stats.hurt[magic] = (magic in stats.hurt) ? stats.hurt[magic] + point : point;
@@ -4277,6 +4672,9 @@ try {
           stats.hurt._mcount++;
           stats.hurt._mtotal += point;
           stats.hurt._mavg = Math.round(stats.hurt._mtotal / stats.hurt._mcount);
+        }
+        if (text.match(/You ((partially )*(evade|parry|block)( and )*)+ the attack/)){
+          stats.self.evade++;
         }
       } else if (text.match(/^[\w ]+ [a-z]+s [\w+ -]+ for \d+( .*)? damage/) || text.match(/^You .* for \d+ .* damage/)) {
         reg = text.match(/for (\d+)( .*)? damage/);
@@ -4305,7 +4703,7 @@ try {
       } else if (text.match(/absorbs \d+ points of damage from the attack into \d+ points of \w+ damage/)) {
         reg = text.match(/(.*) absorbs (\d+) points of damage from the attack into (\d+) points of (\w+) damage/);
         point = reg[2] * 1;
-        magic = parm.log[i - 1].textContent.match(/you for (\d+) (\w+) damage/)[2].replace('ing', '');
+        magic = matchDamageInfoFromLogText(parm.log[i - 1].textContent, false)[2].replace('ing', '');
         stats.hurt[magic] = (magic in stats.hurt) ? stats.hurt[magic] + point : point;
         point = reg[3] * 1;
         magic = `${reg[1].replace('Your ', '')}_${reg[4]}`;
@@ -4329,6 +4727,25 @@ try {
       pauseChange();
     }
     setValue('stats', stats);
+  }
+
+  function matchDamageInfoFromLogText(text, isSkipUnmatched=true){
+    const regList = [
+      /you for (\d+) (\w+) damage/,
+      /and take (\d+) (\w+) damage/,
+      /You take (\d+) (\w+) damage/,
+      /hits you, causing (\d+) points of (\w+) damage/
+    ];
+    for (let reg of regList){
+      let match = text.match(reg);
+      if (!match) {
+        continue;
+      }
+      return match;
+    }
+    if(!isSkipUnmatched){
+      console.log(`Can't match damage info from: `, text);
+    }
   }
 
   function recordUsage2() {
