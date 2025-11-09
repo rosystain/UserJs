@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.34.3
+// @version      2.90.34.4
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -2108,9 +2108,12 @@ try {
   }
 
   const REMOTE_NOTIFICATION_PRIORITY_MAP = {
-    Error: 'high',
-    Defeat: 'high',
-    Riddle: 'high',
+    Victory: '2',
+    Riddle: '4',
+    Error: '3',
+    Defeat: '3',
+    Common: '3',
+    Test: '3',
   };
 
   function resolveRemoteNotificationPriority(eventType) {
