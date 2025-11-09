@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.34.1
+// @version      2.90.34.2
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -910,7 +910,8 @@ try {
       '    <div style="margin-left: 20px;"><l0>Telegram Bot Token</l0><l1>Telegram Bot Token</l1><l2>Telegram Bot Token</l2>: <input name="telegramBotToken" style="width:400px;" type="text" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"></div>',
       '    <div style="margin-left: 20px;"><l0>Telegram Chat ID</l0><l1>Telegram Chat ID</l1><l2>Telegram Chat ID</l2>: <input name="telegramChatId" style="width:200px;" type="text" placeholder="123456789"></div>',
       '    <div style="margin-left: 20px;"><l0>Apprise 服务器地址</l0><l1>Apprise 服務器地址</l1><l2>Apprise Server URL</l2>: <input name="appriseUrl" style="width:400px;" type="text" placeholder="http://localhost:8000"></div>',
-      '    <div style="margin-left: 20px;"><l0>Apprise 通知URLs (逗号分隔)</l0><l1>Apprise 通知URLs (逗號分隔)</l1><l2>Apprise Notification URLs (comma separated)</l2>: <input name="appriseUrls" style="width:400px;" type="text" placeholder="tgram://bottoken/ChatID"></div>',
+  '    <div style="margin-left: 20px;"><l0>Apprise 通知URLs (逗号分隔)</l0><l1>Apprise 通知URLs (逗號分隔)</l1><l2>Apprise Notification URLs (comma separated)</l2>: <input name="appriseUrls" style="width:400px;" type="text" placeholder="tgram://bottoken/ChatID"></div>',
+  '    <div style="margin-left: 20px;"><l0>远程通知优先级</l0><l1>遠程通知優先級</l1><l2>Remote Notification Priority</l2>: <select name="remoteNotificationPriority"><option value="default"><l0>默认（不显式指定）</l0><l1>預設（不另行指定）</l1><l2>Default (omit priority)</l2></option><option value="high"><l0>高</l0><l1>高</l1><l2>High</l2></option></select></div>',
       '    <div><button class="testRemoteNotification"><l0>测试远程通知</l0><l1>測試遠程通知</l1><l2>Test Remote Notification</l2></button></div>',
       '    <div><l0>掉落及数据记录</l0><l1>掉落及數據記錄</l1><l2>Drops and Usage Tracking</l2>: <input id="recordEach" type="checkbox"><label for="recordEach"><l0>单独记录每场战役</l0><l1>單獨記錄每場戰役</l1><l2>Record each battle separately</l2></label></div>',
       '    <div><l0>延迟</l0><l1>延遲</l1><l2>Delay</l2>: 1. <l0>Buff/Debuff/其他技能</l0><l1>Buff/Debuff/其他技能</l1><l2>Skills&BUFF/DEBUFF Spells</l2>: <input class="hvAANumber" name="delay" placeholder="200" type="text">ms 2. <l01>其他</l01><l2>Other</l2>: <input class="hvAANumber" name="delay2" placeholder="30" type="text">ms (',
@@ -2107,6 +2108,24 @@ try {
     }
   }
 
+  const REMOTE_NOTIFICATION_PRIORITY_MAP = {
+    Error: 'high',
+    Defeat: 'high',
+    Riddle: 'high',
+  };
+
+  function resolveRemoteNotificationPriority(eventType) {
+    const option = g('option') || {};
+    const optionPriority = option.remoteNotificationPriority;
+    // UI only exposes 'default' and 'high'
+    if (optionPriority === 'high') {
+      return 'high';
+    }
+    // default: if user didn't choose high, fall back to event-based mapping if available,
+    // otherwise don't set priority (null) so services use their defaults
+    return REMOTE_NOTIFICATION_PRIORITY_MAP[eventType] || null;
+  }
+
   // 远程通知功能（Telegram和Apprise）
   function sendRemoteNotification(eventType, message) {
     if (!g('option').enableRemoteNotification) {
@@ -2114,19 +2133,20 @@ try {
     }
     
     const title = `HV Auto Attack - ${eventType}`;
+    const priority = resolveRemoteNotificationPriority(eventType);
     
     // 发送 Telegram 通知
     if (g('option').telegramBotToken && g('option').telegramChatId) {
-      sendTelegramNotification(title, message);
+      sendTelegramNotification(title, message, priority);
     }
     
     // 发送 Apprise 通知
     if (g('option').appriseUrl && g('option').appriseUrls) {
-      sendAppriseNotification(title, message);
+      sendAppriseNotification(title, message, priority);
     }
   }
   
-  function sendTelegramNotification(title, message) {
+  function sendTelegramNotification(title, message, priority) {
     const botToken = g('option').telegramBotToken;
     const chatId = g('option').telegramChatId;
     
@@ -2136,6 +2156,14 @@ try {
     
     const text = `*${title}*\n\n${message}`;
     const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown',
+    };
+    // Telegram Bot API 没有通用的“priority”字段。
+    // We do not set `disable_notification` by default so the platform uses its defaults.
+    // If you want silent notifications, we could add that option separately.
     
     GM_xmlhttpRequest({
       method: 'POST',
@@ -2143,11 +2171,7 @@ try {
       headers: {
         'Content-Type': 'application/json',
       },
-      data: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: 'Markdown'
-      }),
+      data: JSON.stringify(payload),
       onload: function(response) {
         if (response.status === 200) {
           console.log('Telegram notification sent successfully');
@@ -2161,12 +2185,40 @@ try {
     });
   }
   
-  function sendAppriseNotification(title, message) {
+  function sendAppriseNotification(title, message, priority) {
     const appriseUrl = g('option').appriseUrl;
     const appriseUrls = g('option').appriseUrls;
     
     if (!appriseUrl || !appriseUrls) {
       return;
+    }
+    
+    // 处理 URLs，对 ntfy 协议特殊处理优先级
+    const processedUrls = appriseUrls.split(',').map(u => {
+      u = u.trim();
+      // 如果是 ntfy 协议且需要设置优先级
+      if (priority && (u.startsWith('ntfy://') || u.startsWith('ntfys://'))) {
+        // ntfy 使用数值优先级：1(min), 2(low), 3(default), 4(high), 5(max/urgent)
+        const ntfyPriority = priority === 'high' ? '4' : '3';
+        // 检查 URL 是否已有参数
+        const separator = u.includes('?') ? '&' : '?';
+        // 移除可能存在的旧 priority 参数
+        u = u.replace(/[?&]priority=\d+/, '');
+        u += `${separator}priority=${ntfyPriority}`;
+      }
+      return u;
+    });
+    
+    const requestBody = {
+      urls: processedUrls,
+      title: title,
+      body: message,
+      type: 'info'
+    };
+    
+    // 对于非 ntfy 协议，仍在 body 中设置 priority
+    if (priority) {
+      requestBody.priority = priority;
     }
     
     GM_xmlhttpRequest({
@@ -2175,12 +2227,7 @@ try {
       headers: {
         'Content-Type': 'application/json',
       },
-      data: JSON.stringify({
-        urls: appriseUrls.split(',').map(u => u.trim()),
-        title: title,
-        body: message,
-        type: 'info'
-      }),
+      data: JSON.stringify(requestBody),
       onload: function(response) {
         if (response.status === 200) {
           console.log('Apprise notification sent successfully');
@@ -3385,11 +3432,10 @@ try {
           await pauseAsync(_1s);
           return await onRoundEnd();
         }
-        if (g('battle').roundNow === g('battle').roundAll) { // Next Round
+        if (g('battle').roundNow === g('battle').roundAll) { // Battle finished
           if (g('monsterAlive') > 0) { // Defeat
             SetExitBattleTimeout(g('option').autoSkipDefeated ? 'SkipDefeated' : 'Defeat');
-          }
-          if (g('battle').roundNow === g('battle').roundAll) { // Victory
+          } else { // Victory
             SetExitBattleTimeout('Victory');
           }
         } else {
