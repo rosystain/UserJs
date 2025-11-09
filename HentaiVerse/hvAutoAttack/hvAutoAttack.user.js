@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.34.4
+// @version      2.90.34.3
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -2117,8 +2117,8 @@ try {
   };
 
   function resolveRemoteNotificationPriority(eventType) {
-    // 统一使用默认行为：重要事件自动为 high，其他事件不设置优先级
-    return REMOTE_NOTIFICATION_PRIORITY_MAP[eventType] || null;
+    // 统一使用数值优先级：Victory=2(low), Riddle=4(high), 其他=3(default)
+    return REMOTE_NOTIFICATION_PRIORITY_MAP[eventType] || '3';
   }
 
   // 远程通知功能（Telegram和Apprise）
@@ -2194,12 +2194,12 @@ try {
       // 如果是 ntfy 协议且需要设置优先级
       if (priority && (u.startsWith('ntfy://') || u.startsWith('ntfys://'))) {
         // ntfy 使用数值优先级：1(min), 2(low), 3(default), 4(high), 5(max/urgent)
-        const ntfyPriority = priority === 'high' ? '4' : '3';
+        // priority 已经是数值格式（'2', '3', '4' 等），直接使用
         // 检查 URL 是否已有参数
         const separator = u.includes('?') ? '&' : '?';
         // 移除可能存在的旧 priority 参数
         u = u.replace(/[?&]priority=\d+/, '');
-        u += `${separator}priority=${ntfyPriority}`;
+        u += `${separator}priority=${priority}`;
       }
       return u;
     });
