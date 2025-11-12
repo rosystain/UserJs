@@ -1962,7 +1962,7 @@ try {
 
   function setAlarm(e) { // 发出警报
     e = e || 'Common';
-    if (g('option').notification) {
+    if (g('option').notification || g('option').enableRemoteNotification) {
       setNotification(e);
     }
     if (g('option').alert && g('option').audioEnable && g('option').audioEnable[e]) {
@@ -2071,8 +2071,15 @@ try {
       },
     ][g('lang')][e];
     
-    // 发送远程通知（Telegram或Apprise）
-    sendRemoteNotification(e, notification.text);
+    // 发送远程通知（独立于桌面通知）
+    if (g('option').enableRemoteNotification) {
+      sendRemoteNotification(e, notification.text);
+    }
+    
+    // 发送桌面通知
+    if (!g('option').notification) {
+      return;
+    }
     
     if (typeof GM_notification !== 'undefined') {
       GM_notification({
