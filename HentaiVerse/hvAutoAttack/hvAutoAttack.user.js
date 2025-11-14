@@ -6,7 +6,7 @@
 // @description  HV auto attack script, for the first user, should configure before use it.
 // @description:zh-CN HV自动打怪脚本，初次使用，请先设置好选项，请确认字体设置正常
 // @description:zh-TW HV自動打怪腳本，初次使用，請先設置好選項，請確認字體設置正常
-// @version      2.90.34.4
+// @version      2.90.34.5
 // @author       dodying
 // @namespace    https://github.com/dodying/
 // @supportURL   https://github.com/dodying/UserJs/issues
@@ -296,6 +296,7 @@ try {
         riddleAlert(); // 答题警报
         return;
       }
+      setAlarm('Riddle'); // 在打开弹窗前也发送通知
       window.open(window.location.href, 'riddleWindow', 'resizable,scrollbars,width=1241,height=707');
       return;
     }
@@ -907,8 +908,9 @@ try {
       '      <input id="notification" type="checkbox"><label for="notification"><l0>桌面通知</l0><l1>桌面通知</l1><l2>Notifications</l2></label> ',
       '      <button class="testNotification"><l0>预处理</l0><l1>預處理</l1><l2>Pretreat</l2></button></div>',
       '    <div><input id="enableRemoteNotification" type="checkbox"><label for="enableRemoteNotification"><l0>启用远程通知</l0><l1>啟用遠程通知</l1><l2>Enable Remote Notification</l2></label></div>',
-      '    <div style="margin-left: 20px;"><l0>Telegram Bot Token</l0><l1>Telegram Bot Token</l1><l2>Telegram Bot Token</l2>: <input name="telegramBotToken" style="width:400px;" type="text" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"></div>',
-      '    <div style="margin-left: 20px;"><l0>Telegram Chat ID</l0><l1>Telegram Chat ID</l1><l2>Telegram Chat ID</l2>: <input name="telegramChatId" style="width:200px;" type="text" placeholder="123456789"></div>',
+        '    <div style="margin-left: 20px;"><l0>Telegram Bot Token</l0><l1>Telegram Bot Token</l1><l2>Telegram Bot Token</l2>: <input name="telegramBotToken" style="width:400px;" type="text" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"></div>',
+        '    <div style="margin-left: 20px;"><l0>Telegram Chat ID</l0><l1>Telegram Chat ID</l1><l2>Telegram Chat ID</l2>: <input name="telegramChatId" style="width:200px;" type="text" placeholder="123456789"></div>',
+        '    <div style="margin-left: 20px;"><l0>Webhook URL</l0><l1>Webhook URL</l1><l2>Webhook URL</l2>: <input name="webhookUrl" style="width:400px;" type="text" placeholder="https://example.com/webhook"></div>',
       '    <div style="margin-left: 20px;"><l0>Apprise 服务器地址</l0><l1>Apprise 服務器地址</l1><l2>Apprise Server URL</l2>: <input name="appriseUrl" style="width:400px;" type="text" placeholder="http://localhost:8000"></div>',
   '    <div style="margin-left: 20px;"><l0>Apprise 通知URLs (逗号分隔)</l0><l1>Apprise 通知URLs (逗號分隔)</l1><l2>Apprise Notification URLs (comma separated)</l2>: <input name="appriseUrls" style="width:400px;" type="text" placeholder="tgram://bottoken/ChatID"></div>',
       '    <div><button class="testRemoteNotification"><l0>测试远程通知</l0><l1>測試遠程通知</l1><l2>Test Remote Notification</l2></button></div>',
@@ -1721,7 +1723,7 @@ try {
         } else if (inputs[i].type === 'text' || inputs[i].type === 'hidden') {
           itemName = inputs[i].name;
           // 避免将占位符当作真实配置保存：这些字段为空即视为未配置
-          const skipPlaceholderNames = ['telegramBotToken', 'telegramChatId', 'appriseUrl', 'appriseUrls'];
+          const skipPlaceholderNames = ['telegramBotToken', 'telegramChatId', 'webhookUrl', 'appriseUrl', 'appriseUrls'];
           if (skipPlaceholderNames.includes(itemName)) {
             itemValue = inputs[i].value; // 不使用 placeholder 作为回退
           } else {
@@ -2128,7 +2130,7 @@ try {
     return REMOTE_NOTIFICATION_PRIORITY_MAP[eventType] || '3';
   }
 
-  // 远程通知功能（Telegram和Apprise）
+  // 远程通知功能（Telegram -> Webhook -> Apprise）
   function sendRemoteNotification(eventType, message) {
     if (!g('option').enableRemoteNotification) {
       return;
@@ -2140,6 +2142,11 @@ try {
     // 发送 Telegram 通知
     if (g('option').telegramBotToken && g('option').telegramChatId) {
       sendTelegramNotification(title, message, priority);
+    }
+
+    // 发送 Webhook 通知（POST）
+    if (g('option').webhookUrl) {
+      sendWebhookNotification(eventType, title, message, priority);
     }
     
     // 发送 Apprise 通知
@@ -2239,6 +2246,40 @@ try {
       },
       onerror: function(error) {
         console.error('Error sending Apprise notification:', error);
+      }
+    });
+  }
+
+  function sendWebhookNotification(eventType, title, message, priority) {
+    const url = g('option').webhookUrl;
+    if (!url) {
+      return;
+    }
+
+    const payload = {
+      event: String(eventType),
+      title: String(title),
+      message: String(message),
+      priority: String(priority),
+      timestamp: String(Date.now()),
+    };
+
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      data: JSON.stringify(payload),
+      onload: function(response) {
+        if (response.status >= 200 && response.status < 300) {
+          console.log('Webhook notification sent successfully');
+        } else {
+          console.error('Failed to send webhook notification:', response.status, response.statusText);
+        }
+      },
+      onerror: function(error) {
+        console.error('Error sending webhook notification:', error);
       }
     });
   }
